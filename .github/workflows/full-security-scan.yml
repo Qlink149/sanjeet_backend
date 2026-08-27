@@ -1,0 +1,141 @@
+name: Full Security Scan
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Trivy and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget jq
+          wget -qO- https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+          sudo mv ./bin/trivy /usr/local/bin/trivy
+
+      - name: Run Semgrep
+        id: semgrep
+        continue-on-error: true
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/security-audit
+
+      - name: Run Gitleaks
+        id: gitleaks
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Trivy Filesystem Scan
+        id: trivy_fs
+        continue-on-error: true
+        run: |
+          trivy fs \
+            --severity HIGH,CRITICAL \
+            --format table \
+            --exit-code 0 \
+            .
+
+          trivy fs \
+            --severity HIGH,CRITICAL \
+            --format json \
+            --exit-code 0 \
+            -o trivy-fs.json \
+            .
+
+      - name: Run Checkov
+        id: checkov
+        continue-on-error: true
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          soft_fail: true
+
+      - name: Generate SBOM
+        id: sbom
+        continue-on-error: true
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          output-file: sbom.spdx.json
+
+      - name: Generate Security Summary
+        if: always()
+        run: |
+          echo "# Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## Scan Status" >> $GITHUB_STEP_SUMMARY
+          echo "- Semgrep: ${{ steps.semgrep.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Gitleaks: ${{ steps.gitleaks.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy Filesystem: ${{ steps.trivy_fs.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Checkov: ${{ steps.checkov.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          summarize_file () {
+            FILE=$1
+            TITLE=$2
+
+            if [ ! -f "$FILE" ]; then
+              return
+            fi
+
+            CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' "$FILE")
+            HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' "$FILE")
+
+            echo "## $TITLE" >> $GITHUB_STEP_SUMMARY
+            echo "- Critical: $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            echo "- High: $HIGH" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            jq -r '
+            .Results[]?.Vulnerabilities[]? |
+            select(.Severity=="CRITICAL" or .Severity=="HIGH") |
+            "### " + (.VulnerabilityID // "") + "\n" +
+            "- Severity: " + (.Severity // "") + "\n" +
+            "- Package: " + (.PkgName // "") + "\n" +
+            "- Installed Version: " + (.InstalledVersion // "") + "\n" +
+            "- Fixed Version: " + (.FixedVersion // "") + "\n" +
+            "- Title: " + (.Title // "") + "\n\n"
+            ' "$FILE" >> $GITHUB_STEP_SUMMARY
+          }
+
+          summarize_file trivy-fs.json "Filesystem Scan"
+
+      - name: Upload Trivy Filesystem Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-filesystem-report
+          path: trivy-fs.json
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-report
+          path: sbom.spdx.json
+
+      - name: Security Gate
+        if: always()
+        run: |
+          echo "## Tool outcomes" >> $GITHUB_STEP_SUMMARY
+          echo "- Semgrep: ${{ steps.semgrep.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Gitleaks: ${{ steps.gitleaks.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trivy: ${{ steps.trivy_fs.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Checkov: ${{ steps.checkov.outcome }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scans are report-only on push. Findings stay in the summary and artifacts." >> $GITHUB_STEP_SUMMARY
+          echo "✅ SECURITY SCAN COMPLETED (report-only)"

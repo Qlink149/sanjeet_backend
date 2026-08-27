@@ -1,0 +1,31 @@
+LEAD TEMPLATE - sheet
+
+{
+  "status": "success",
+  "template": {
+    "appId": "710da17c-0a03-4d6a-89d6-cccdf303907b",
+    "buttonSupported": "URL",
+    "category": "UTILITY",
+    "containerMeta": "{\"appId\":\"710da17c-0a03-4d6a-89d6-cccdf303907b\",\"data\":\"A new appointment booking has been received. Please check the Google Sheet for details.\",\"buttons\":[{\"type\":\"URL\",\"text\":\"Check Sheet\",\"url\":\"https://docs.google.com/spreadsheets/d/1fM3hiia27nH_3jLgScJ4yceAd_5k79tfIMTytzgqwis/edit?gid=0#gid=0\",\"example\":[\"https://docs.google.com/spreadsheets/d/1fM3hiia27nH_3jLgScJ4yceAd_5k79tfIMTytzgqwis/edit?gid=0#gid=0\"]}],\"header\":\"Dear Team,\",\"footer\":\"to unsubscribe, reply STOP\",\"sampleText\":\"A new appointment booking has been received. Please check the Google Sheet for details.\",\"sampleHeader\":\"Dear Team,\",\"enableSample\":true,\"editTemplate\":false,\"allowTemplateCategoryChange\":false,\"addSecurityRecommendation\":false,\"isCPR\":false,\"cpr\":false}",
+    "createdOn": 1763050512445,
+    "data": "Dear Team,\nA new appointment booking has been received. Please check the Google Sheet for details.\nto unsubscribe, reply STOP | [Check Sheet,https://docs.google.com/spreadsheets/d/1fM3hiia27nH_3jLgScJ4yceAd_5k79tfIMTytzgqwis/edit?gid=0#gid=0]",
+    "elementName": "pacific_lead",
+    "id": "b9560820-21d5-4d51-80f6-8da59a725322",
+    "languageCode": "en_US",
+    "languagePolicy": "deterministic",
+    "meta": "{\"example\":\"A new appointment booking has been received. Please check the Google Sheet for details.\"}",
+    "modifiedOn": 1763050512445,
+    "namespace": "252b291e_07e9_4971_9bec_140b74b4ced0",
+    "priority": 2,
+    "quality": "UNKNOWN",
+    "retry": 0,
+    "stage": "NONE",
+    "status": "PENDING",
+    "templateType": "TEXT",
+    "vertical": "Internal_vertical",
+    "wabaId": "26118342364432286"
+  }
+}
+
+CTA BUTTON - 
+[{"type":"URL","text":"Check Sheet","url":"https://docs.google.com/spreadsheets/d/1fM3hiia27nH_3jLgScJ4yceAd_5k79tfIMTytzgqwis/edit?gid=0#gid=0","example":["https://docs.google.com/spreadsheets/d/1fM3hiia27nH_3jLgScJ4yceAd_5k79tfIMTytzgqwis/edit?gid=0#gid=0"]}]

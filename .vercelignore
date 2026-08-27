@@ -1,0 +1,12 @@
+data/
+tests/
+scripts/
+logs/
+.ruff_cache/
+__pycache__/
+venv/
+.env
+*.pyc
+*.xlsx
+*.png
+

@@ -1,0 +1,194 @@
+name: Backup deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to deploy"
+        required: true
+        default: "main"
+
+env:
+  # Shared Vultr registry (Sydney). ONLY the sanjeet_bot image repo is ever
+  # created/updated/pruned. Sibling client repos must never be touched:
+  #   qlink01/onereside_bot
+  #   qlink01/aura_serve
+  #   qlink01/nkl_inventory_management
+  IMAGE_REPO: syd.vultrcr.com/qlink01/sanjeet_bot
+
+jobs:
+  Build:
+    name: Setup Chatbot Service
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.branch }}
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Login to Vultr Container Registry
+        run: |
+          docker login -u "${{ secrets.VULTR_REGISTRY_USERNAME }}" \
+            -p "${{ secrets.VULTR_REGISTRY_PASSWORD }}" \
+            "${{ secrets.VULTR_REGISTRY_URL }}"
+
+      # Delete ALL sanjeet_bot tags BEFORE build/push so the shared 10GB Vultr
+      # quota has room for the new image. Sibling qlink01/* repos are never
+      # touched. Hard-guarded path check + authenticated crane (unauthenticated
+      # delete previously failed silently and left the registry full).
+      - name: Delete sanjeet_bot images before deploy
+        env:
+          VULTR_REGISTRY_URL: ${{ secrets.VULTR_REGISTRY_URL }}
+          VULTR_REGISTRY_USERNAME: ${{ secrets.VULTR_REGISTRY_USERNAME }}
+          VULTR_REGISTRY_PASSWORD: ${{ secrets.VULTR_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          IMAGE_REPO="${{ env.IMAGE_REPO }}"
+
+          case "$IMAGE_REPO" in
+            */sanjeet_bot) ;;
+            *)
+              echo "Refusing cleanup: IMAGE_REPO must end with /sanjeet_bot (got: $IMAGE_REPO)"
+              exit 1
+              ;;
+          esac
+
+          curl -sL "https://github.com/google/go-containerregistry/releases/download/v0.20.2/go-containerregistry_Linux_x86_64.tar.gz" \
+            | tar -xz -C /usr/local/bin crane
+
+          REGISTRY_HOST="$(echo "$VULTR_REGISTRY_URL" | sed -E 's#^https?://##; s#/.*##')"
+          if [ -z "$REGISTRY_HOST" ]; then
+            REGISTRY_HOST="syd.vultrcr.com"
+          fi
+
+          echo "Authenticating crane against $REGISTRY_HOST"
+          crane auth login "$REGISTRY_HOST" \
+            -u "$VULTR_REGISTRY_USERNAME" \
+            -p "$VULTR_REGISTRY_PASSWORD"
+
+          echo "Listing tags for $IMAGE_REPO only (other qlink01/* repos are ignored):"
+          tags="$(crane ls "$IMAGE_REPO" 2>/dev/null || true)"
+          if [ -z "$tags" ]; then
+            echo "No existing sanjeet_bot tags. Nothing to delete."
+            exit 0
+          fi
+
+          echo "$tags"
+          deleted=0
+          failed=0
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            echo "Deleting ${IMAGE_REPO}:${tag}"
+            if crane delete "${IMAGE_REPO}:${tag}"; then
+              deleted=$((deleted + 1))
+            else
+              echo "WARN: failed to delete ${IMAGE_REPO}:${tag}"
+              failed=$((failed + 1))
+            fi
+          done <<< "$tags"
+
+          echo "Deleted $deleted sanjeet_bot tag(s); $failed failure(s)."
+          # Give Vultr a moment to reclaim blob storage after tag deletes.
+          sleep 5
+
+      - name: Build and push Docker image
+        run: |
+          set -euo pipefail
+          export DOCKER_BUILDKIT=1
+          IMAGE_REPO="${{ env.IMAGE_REPO }}"
+          case "$IMAGE_REPO" in
+            */sanjeet_bot) ;;
+            *)
+              echo "Refusing push: IMAGE_REPO must end with /sanjeet_bot"
+              exit 1
+              ;;
+          esac
+          docker build -t "${IMAGE_REPO}:latest" .
+          docker push "${IMAGE_REPO}:latest"
+
+      - name: Deploy to DigitalOcean Droplet
+        uses: appleboy/ssh-action@master
+        with:
+          host: "206.189.138.222"
+          username: root
+          password: ${{ secrets.DIGITALOCEAN_PASSWORD }}
+          envs: IMAGE_REPO
+          command_timeout: 25m
+          script: |
+            set -euo pipefail
+            case "$IMAGE_REPO" in
+              */sanjeet_bot) ;;
+              *)
+                echo "Refusing deploy pull: IMAGE_REPO must end with /sanjeet_bot"
+                exit 1
+                ;;
+            esac
+
+            docker login -u "${{ secrets.VULTR_REGISTRY_USERNAME }}" \
+              -p "${{ secrets.VULTR_REGISTRY_PASSWORD }}" \
+              "${{ secrets.VULTR_REGISTRY_URL }}"
+
+            # Free droplet disk: stop current container and drop old sanjeet_bot images
+            # before pulling the new one.
+            docker stop qlink || true
+            docker rm qlink || true
+            docker images "${IMAGE_REPO}" -q | sort -u | xargs -r docker rmi -f || true
+            docker image prune -f || true
+
+            docker pull "${IMAGE_REPO}:latest"
+
+            docker run -d \
+              --name qlink \
+              -p 8000:8000 \
+              -e PYTHONUNBUFFERED=1 \
+              -e PYTHONDONTWRITEBYTECODE=1 \
+              -e OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }} \
+              -e MONGO_URI=${{ secrets.MONGO_URI }} \
+              -e ENV_MODE=${{ secrets.ENV_MODE }} \
+              -e GUPSHUP_APP_ID=${{ secrets.GUPSHUP_APP_ID }} \
+              -e GUPSHUP_TOKEN=${{ secrets.GUPSHUP_TOKEN }} \
+              -e GUPSHUP_APP_NAME=${{ secrets.GUPSHUP_APP_NAME }} \
+              -e GUPSHUP_API_KEY=${{ secrets.GUPSHUP_API_KEY }} \
+              -e GUPSHUP_SOURCE=${{ secrets.GUPSHUP_SOURCE }} \
+              -e PUBLIC_BASE_URL=${{ secrets.PUBLIC_BASE_URL }} \
+              -e PINECONE_API=${{ secrets.PINECONE_API }} \
+              -e PINECONE_NAMESPACE=${{ secrets.PINECONE_NAMESPACE }} \
+              -e WEBHOOK_API=${{ secrets.WEBHOOK_API }} \
+              -e LOGIN_USERNAME=${{ secrets.LOGIN_USERNAME }} \
+              -e LOGIN_PASS=${{ secrets.LOGIN_PASS }} \
+              "${IMAGE_REPO}:latest"
+
+      - name: Increase nginx upload size limit
+        # Default nginx client_max_body_size is 1MB, which silently rejects
+        # (413, no CORS headers — browsers misreport this as a CORS error)
+        # any template image upload over that size. WhatsApp/Gupshup allows
+        # images up to 5MB, so raise the ceiling well above that.
+        uses: appleboy/ssh-action@master
+        with:
+          host: "206.189.138.222"
+          username: root
+          password: ${{ secrets.DIGITALOCEAN_PASSWORD }}
+          script: |
+            set -euo pipefail
+            echo 'client_max_body_size 20M;' > /etc/nginx/conf.d/upload_size.conf
+            nginx -t
+            systemctl reload nginx
+
+      - name: Cleanup unused images on droplet only
+        uses: appleboy/ssh-action@master
+        with:
+          host: "206.189.138.222"
+          username: root
+          password: ${{ secrets.DIGITALOCEAN_PASSWORD }}
+          script: |
+            # Droplet disk only — does not delete Vultr registry repos.
+            docker image prune -f
+            docker builder prune -f || true
