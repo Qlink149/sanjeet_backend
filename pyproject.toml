@@ -1,3 +1,28 @@
+[project]
+name = "sanjeet-bot"
+version = "0.1.0"
+description = "Sanjeet WhatsApp nurture bot"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[all]==0.111.0",
+    "httpx",
+    "openai",
+    "pinecone",
+    "pymongo",
+    "python-dotenv",
+    "pytz",
+    "gspread",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-auth-httplib2",
+    "pandas",
+    "openpyxl",
+    "xlrd",
+    "python-multipart",
+    "aiofiles",
+    "apscheduler",
+]
+
 [tool.poetry]
 name = "qlink-chatbot"
 version = "0.1.0"
@@ -57,4 +82,4 @@ indent-style = "space"
 quote-style = "double"
 
 [tool.vercel]
-entrypoint = "main:app"
+entrypoint = "qlink_chatbot.main:app"
