@@ -24,26 +24,32 @@ class SingletonLogger:
             return cls._instance
 
     def _initialize_logger(self):
-        log_file_path = "logs/app.log"
-        os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
-
         self.logger = logging.getLogger("SingletonLogger")
         self.logger.setLevel(logging.DEBUG)
 
         # Avoid duplicate handlers
-        if not self.logger.handlers:
-            stream_handler = logging.StreamHandler()
-            stream_handler.setLevel(logging.DEBUG)
+        if self.logger.handlers:
+            return
 
+        formatter = JsonFormatter()
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(logging.DEBUG)
+        stream_handler.setFormatter(formatter)
+        self.logger.addHandler(stream_handler)
+
+        # Vercel functions are read-only except /tmp; skip the local log file.
+        if os.environ.get("VERCEL"):
+            return
+
+        try:
+            log_file_path = "logs/app.log"
+            os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
             file_handler = logging.FileHandler(filename=log_file_path, mode="a")
             file_handler.setLevel(logging.DEBUG)
-
-            formatter = JsonFormatter()
-            stream_handler.setFormatter(formatter)
             file_handler.setFormatter(formatter)
-
-            self.logger.addHandler(stream_handler)
             self.logger.addHandler(file_handler)
+        except OSError:
+            pass
 
 
 class JsonFormatter(logging.Formatter):
