@@ -34,15 +34,18 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = ">=3.12"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "0.4.1"
 pre-commit = "3.7.0"
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["qlink_chatbot"]
 
 [tool.ruff]
 line-length = 80
