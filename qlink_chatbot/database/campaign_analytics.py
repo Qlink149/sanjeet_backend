@@ -24,6 +24,15 @@ def update_campaign_recipient_status(
     if not ids or not status:
         return False
 
+    from qlink_chatbot.database.db_utils import update_outbound_chat_status
+
+    update_outbound_chat_status(
+        ids,
+        status,
+        error_reason=error_reason,
+        whatsapp_message_id=whatsapp_message_id,
+    )
+
     doc = campaigns.find_one(
         {
             "$or": [

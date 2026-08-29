@@ -86,7 +86,7 @@ def format_user(user_message, phone_number):
 
 
 def format_chat_history(user, assistant, phone_number):
-    """Format chat history in user assistant way."""
+    """Format standalone user / assistant rows. Skip empty assistant bubbles."""
     try:
         chat_history = [
             {
@@ -95,13 +95,17 @@ def format_chat_history(user, assistant, phone_number):
                     user_message=user, phone_number=phone_number
                 ),
             },
-            {
-                "role": "assistant",
-                "content": format_assistant(
-                    assistant_message=assistant, phone_number=phone_number
-                ),
-            },
         ]
+        assistant_content = format_assistant(
+            assistant_message=assistant, phone_number=phone_number
+        )
+        if assistant_content and str(assistant_content).strip():
+            chat_history.append(
+                {
+                    "role": "assistant",
+                    "content": assistant_content,
+                }
+            )
 
         return chat_history
     except Exception as e:

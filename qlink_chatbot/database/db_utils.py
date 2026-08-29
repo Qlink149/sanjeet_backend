@@ -4,7 +4,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
-from pymongo import ReturnDocument
 
 from qlink_chatbot.database.collections import (
     idac,
@@ -20,7 +19,7 @@ from qlink_chatbot.database.leads import (
     build_lead_query,
     import_coachee_json,
 )
-from qlink_chatbot.utils.format_chathistory import format_chat_history
+from qlink_chatbot.utils.format_chathistory import format_assistant, format_user
 from qlink_chatbot.utils.logger_config import logger
 
 from uuid import uuid4
@@ -39,45 +38,105 @@ def mongo_search(query, collection):
         raise e
 
 
+def append_chat_entries(
+    phone_number: str,
+    entries: list,
+    username: str | None = None,
+):
+    """Append standalone chat rows (user and/or assistant) without rewriting history."""
+    if not phone_number or not entries:
+        return
+    now = datetime.now(timezone.utc)
+    rows = []
+    for entry in entries:
+        row = dict(entry)
+        row.setdefault("at", now)
+        rows.append(row)
+    update: dict = {
+        "$push": {"chat_history": {"$each": rows}},
+        "$set": {
+            "updated_at": now,
+            "phone_number": phone_number,
+        },
+        "$setOnInsert": {
+            "created_at": now,
+            "service_selected": None,
+        },
+    }
+    if username:
+        update["$set"]["username"] = username
+    idac.update_one({"phone_number": phone_number}, update, upsert=True)
+
+
+def update_outbound_chat_status(
+    message_ids: list[str],
+    status: str,
+    error_reason: str | None = None,
+    whatsapp_message_id: str | None = None,
+):
+    """Set status on outbound bubbles keyed by Gupshup / WhatsApp message id."""
+    ids = [i for i in message_ids if i]
+    if not ids or not status:
+        return
+    now = datetime.now(timezone.utc)
+    set_fields = {
+        "chat_history.$[elem].status": status,
+        "updated_at": now,
+    }
+    if error_reason:
+        set_fields["chat_history.$[elem].error"] = error_reason
+    if whatsapp_message_id:
+        set_fields["chat_history.$[elem].whatsapp_message_id"] = whatsapp_message_id
+    for field in ("gupshup_message_id", "whatsapp_message_id"):
+        idac.update_many(
+            {f"chat_history.{field}": {"$in": ids}},
+            {"$set": set_fields},
+            array_filters=[{f"elem.{field}": {"$in": ids}}],
+        )
+
+
 def save_to_mongo(data):
-    """Saves the data to a MongoDB collection."""
+    """Append inbound user text and any bot auto-reply as separate chat rows."""
+    phone_number = data.get("phone_number")
     try:
         logger.info(
             "Request received to save user profile with data",
-            extra={"phone_number": data["phone_number"]},
+            extra={"phone_number": phone_number},
         )
         query = data["messages"]
-        
         assistant = data["bot_response"] if "bot_response" in data else None
-        phone_number = data["phone_number"]
-        user_profile_data = data.get("user_profile") or get_user_profile(phone_number) or {}
-        user_profile_data.pop("_id", None)
-
-        new_chat = format_chat_history(
-            user=query, assistant=assistant, phone_number=phone_number
+        now = datetime.now(timezone.utc)
+        entries = []
+        user_content = format_user(user_message=query, phone_number=phone_number)
+        if user_content and str(user_content).strip():
+            entries.append(
+                {
+                    "role": "user",
+                    "content": user_content,
+                    "at": now,
+                }
+            )
+        if assistant:
+            assistant_content = format_assistant(assistant, phone_number)
+            if assistant_content and str(assistant_content).strip():
+                entries.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_content,
+                        "at": now,
+                        "status": "submitted",
+                    }
+                )
+        append_chat_entries(
+            phone_number,
+            entries,
+            username=data.get("whatsapp_username") or None,
         )
-
-        current_history = user_profile_data.get("chat_history", [])
-        user_profile_data["chat_history"] = current_history + new_chat
-        user_profile_data["updated_at"] = datetime.now(timezone.utc)
-        user_profile_data["username"] = data["whatsapp_username"]
-
-        response = idac.find_one_and_update(
-            {"phone_number": phone_number},
-            {"$set": user_profile_data},
-            upsert=True,  # Insert if document doesn't exist
-            return_document=ReturnDocument.AFTER,
-        )
-
         logger.info(
             "User profile saved successfully",
-            extra={
-                "response_id": response.get("_id"),
-                "phone_number": phone_number,
-            },
+            extra={"phone_number": phone_number},
         )
-        response.pop("_id")
-        return response
+        return get_user_profile(phone_number)
     except Exception as e:
         logger.exception(
             "MongoDB save failed:",
