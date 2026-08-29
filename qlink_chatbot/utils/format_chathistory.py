@@ -5,6 +5,8 @@ from qlink_chatbot.utils.logger_config import logger
 
 def format_assistant(assistant_message, phone_number):
     """Format the assistant message to a user assistant way."""
+    if not assistant_message:
+        return ""
     body = ""
     try:
         for assistant in assistant_message:

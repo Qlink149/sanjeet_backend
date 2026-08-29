@@ -27,6 +27,94 @@ QUICK_REPLY_RESPONSES = {
 }
 
 
+def _gupshup_native_to_meta(payload: dict) -> tuple[str, str, dict] | None:
+    """Gupshup native ``type=message`` payload → phone, name, Meta-shaped message."""
+    inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    msg_type = (payload.get("type") or "").lower()
+    sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
+    phone = str(payload.get("source") or sender.get("phone") or "").strip()
+    username = str(sender.get("name") or "").strip()
+    if not phone:
+        return None
+
+    if msg_type == "text":
+        text = inner.get("text") if inner else payload.get("text")
+        messages = {
+            "type": "text",
+            "from": phone,
+            "text": {"body": str(text or "")},
+        }
+    elif msg_type in {"button_reply", "quick_reply", "button"}:
+        title = inner.get("title") or inner.get("text") or inner.get("postbackText") or ""
+        messages = {
+            "type": "interactive",
+            "from": phone,
+            "interactive": {
+                "type": "button_reply",
+                "button_reply": {
+                    "title": str(title),
+                    "id": str(inner.get("id") or ""),
+                },
+            },
+        }
+    elif msg_type == "list_reply":
+        title = inner.get("title") or inner.get("postbackText") or ""
+        messages = {
+            "type": "interactive",
+            "from": phone,
+            "interactive": {
+                "type": "list_reply",
+                "list_reply": {
+                    "title": str(title),
+                    "id": str(inner.get("id") or ""),
+                },
+            },
+        }
+    else:
+        messages = {
+            "type": "text",
+            "from": phone,
+            "text": {"body": f"[{msg_type or 'message'}]"},
+        }
+    return phone, username, messages
+
+
+async def _save_inbound_chat(
+    phone_number: str,
+    whatsapp_username: str,
+    messages: dict,
+    response_manager: ResponseManager,
+):
+    user_profile = await asyncio.to_thread(get_user_profile, phone_number) or {
+        "chat_history": [],
+        "service_selected": None,
+    }
+    pipeline_data = {
+        "phone_number": phone_number,
+        "messages": messages,
+        "whatsapp_username": whatsapp_username,
+        "user_profile": user_profile,
+    }
+    button_label = _extract_button_label(messages)
+    quick_reply_text = (
+        QUICK_REPLY_RESPONSES.get(button_label.strip().lower())
+        if button_label
+        else None
+    )
+    if quick_reply_text:
+        logger.info(
+            "Quick-reply button intercepted",
+            extra={"button_label": button_label, "phone_number": phone_number},
+        )
+        pipeline_data["bot_response"] = [
+            {"type": "text", "text": quick_reply_text}
+        ]
+        await asyncio.to_thread(save_to_mongo, pipeline_data)
+        await asyncio.to_thread(response_manager.handle_responses, pipeline_data)
+        return
+    await asyncio.to_thread(save_to_mongo, pipeline_data)
+
+
 def _extract_button_label(messages: dict) -> str | None:
     """Pulls the tapped button's label out of an inbound message, across
     the few different shapes BSPs use to relay a quick-reply tap."""
@@ -113,7 +201,6 @@ async def messages(request: Request):
     )
     phone_number = None
     response_manager = ResponseManager()
-    pipeline_data = None
 
     try:
         if request_data.get("type") == "message-event":
@@ -155,9 +242,33 @@ async def messages(request: Request):
                 )
             return {"status": "success"}
 
-        if "payload" in request_data:
-            logger.info("Payload found in request data, ignoring it")
-            return None
+        # Gupshup native inbound: {type: "message", payload: {source, type, payload, sender}}
+        if request_data.get("type") == "message" and isinstance(
+            request_data.get("payload"), dict
+        ):
+            native_payload = request_data["payload"]
+            if "entry" in native_payload:
+                request_data = native_payload
+            else:
+                converted = _gupshup_native_to_meta(native_payload)
+                if converted is None:
+                    logger.info("Native inbound ignored; no phone on payload")
+                    return {"status": "ignored", "reason": "no phone_number"}
+                phone_number, whatsapp_username, messages = converted
+                await _save_inbound_chat(
+                    phone_number,
+                    whatsapp_username,
+                    messages,
+                    response_manager,
+                )
+                return {"status": "success"}
+
+        if "entry" not in request_data:
+            logger.info(
+                "Webhook ignored; unrecognized shape",
+                extra={"keys": list(request_data.keys())[:12]},
+            )
+            return {"status": "ignored"}
 
         whatsapp_event = request_data["entry"][0]["changes"][0]["value"]
 
@@ -207,37 +318,12 @@ async def messages(request: Request):
             if "contacts" in request_data["entry"][0]["changes"][0]["value"]
             else ""
         )
-
-        user_profile = await asyncio.to_thread(get_user_profile, phone_number) or {
-            "chat_history": [],
-            "service_selected": None,
-        }
-        pipeline_data = {
-            "phone_number": phone_number,
-            "messages": messages,
-            "whatsapp_username": whatsapp_username,
-            "user_profile": user_profile,
-        }
-
-        button_label = _extract_button_label(messages)
-        quick_reply_text = (
-            QUICK_REPLY_RESPONSES.get(button_label.strip().lower())
-            if button_label
-            else None
+        await _save_inbound_chat(
+            phone_number,
+            whatsapp_username,
+            messages,
+            response_manager,
         )
-        if quick_reply_text:
-            logger.info(
-                "Quick-reply button intercepted",
-                extra={"button_label": button_label, "phone_number": phone_number},
-            )
-            pipeline_data["bot_response"] = [
-                {"type": "text", "text": quick_reply_text}
-            ]
-            await asyncio.to_thread(save_to_mongo, pipeline_data)
-            await asyncio.to_thread(response_manager.handle_responses, pipeline_data)
-            return {"status": "success"}
-
-        await asyncio.to_thread(save_to_mongo, pipeline_data)
         return {"status": "success"}
 
     except Exception as e:
