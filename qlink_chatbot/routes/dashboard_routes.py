@@ -31,6 +31,7 @@ from qlink_chatbot.database.leads import PIPELINE_VALUES, build_lead_query, get_
 from qlink_chatbot.database.masterclasses import (
     create_masterclass,
     delete_masterclass,
+    list_masterclass_registrants,
     list_masterclasses,
     set_active,
     update_masterclass,
@@ -811,6 +812,7 @@ async def fetch_filtered_leads(
     source: str | None = None,
     pipeline: str | None = None,
     product: str | None = None,
+    masterclass_id: str | None = None,
     whatsapp_ready: bool = True,
     no_number: bool = False,
     not_whatsapp_ready: bool = False,
@@ -831,6 +833,7 @@ async def fetch_filtered_leads(
             pipeline=pipeline,
             product=product,
             source=source,
+            masterclass_id=masterclass_id,
             whatsapp_ready_only=whatsapp_ready and not no_number and not not_whatsapp_ready,
             no_number_only=no_number,
             not_whatsapp_ready_only=not_whatsapp_ready and not no_number,
@@ -888,6 +891,19 @@ async def fetch_masterclasses():
         logger.exception("Error listing masterclasses", extra={"exception": e})
         return JSONResponse(
             content={"success": False, "message": "Error listing masterclasses"},
+            status_code=500,
+        )
+
+
+@dashboard_router.get("/masterclasses/{masterclass_id}/registrants")
+async def fetch_masterclass_registrants(masterclass_id: str):
+    try:
+        data = await asyncio.to_thread(list_masterclass_registrants, masterclass_id)
+        return JSONResponse(content={"success": True, "data": data}, status_code=200)
+    except Exception as e:
+        logger.exception("Error listing masterclass registrants", extra={"exception": e})
+        return JSONResponse(
+            content={"success": False, "message": "Error listing registrants"},
             status_code=500,
         )
 

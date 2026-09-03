@@ -98,6 +98,7 @@ def build_lead_query(
     pipeline: str | None = None,
     product: str | None = None,
     source: str | None = None,
+    masterclass_id: str | None = None,
     whatsapp_ready_only: bool = False,
     no_number_only: bool = False,
     not_whatsapp_ready_only: bool = False,
@@ -119,6 +120,8 @@ def build_lead_query(
         query["products"] = prod
     if source:
         query["source"] = source
+    if masterclass_id:
+        query["masterclass_registrations.masterclass_id"] = masterclass_id
     if no_number_only:
         query["$or"] = [
             {"contact_number": {"$exists": False}},
@@ -132,6 +135,24 @@ def build_lead_query(
         query["whatsapp_ready"] = True
         query["contact_number"] = {"$nin": [None, ""]}
     return query
+
+
+def _engagement_event(
+    event_type: str,
+    at: datetime,
+    *,
+    masterclass_id: str | None = None,
+    title: str | None = None,
+    label: str | None = None,
+) -> dict:
+    event = {"type": event_type, "at": at}
+    if label:
+        event["label"] = label
+    if masterclass_id:
+        event["masterclass_id"] = masterclass_id
+    if title:
+        event["title"] = title
+    return event
 
 
 def _serialize_lead(doc: dict) -> dict:
@@ -154,6 +175,19 @@ def _serialize_lead(doc: dict) -> dict:
                 item["registered_at"] = at.isoformat()
             cleaned.append(item)
         doc["masterclass_registrations"] = cleaned
+    engagement = doc.get("engagement")
+    if isinstance(engagement, list):
+        cleaned_eng = []
+        for row in engagement:
+            if not isinstance(row, dict):
+                continue
+            item = dict(row)
+            at = item.get("at")
+            if isinstance(at, datetime):
+                item["at"] = at.isoformat()
+            cleaned_eng.append(item)
+        cleaned_eng.sort(key=lambda e: e.get("at") or "", reverse=True)
+        doc["engagement"] = cleaned_eng
     return doc
 
 
@@ -581,8 +615,16 @@ def upsert_quiz_lead(
         "quiz_answers": answers or {},
         "updated_at": now,
     }
+    quiz_event = _engagement_event(
+        "quiz_submitted",
+        now,
+        label=f"Quiz submitted{f' · {archetype}' if archetype else ''}",
+    )
     if existing:
-        update = {"$set": payload}
+        update: dict = {
+            "$set": payload,
+            "$push": {"engagement": quiz_event},
+        }
         if stored:
             update["$addToSet"] = {"contact_numbers": stored}
         leads.update_one({"lead_id": existing["lead_id"]}, update)
@@ -594,6 +636,7 @@ def upsert_quiz_lead(
         "aka": [],
         "products": [],
         "pipeline": "nurture",
+        "engagement": [quiz_event],
         "created_at": now,
     }
     leads.insert_one(lead)
@@ -640,24 +683,60 @@ def register_for_masterclass(
                 break
 
     if existing:
-        update: dict = {
-            "$set": {
-                "updated_at": now,
-                "masterclass_registered_at": now,
-            },
-            "$addToSet": {
-                "products": {"$each": ["Registered", product_tag]},
-                "contact_numbers": stored,
-            },
-        }
-        if not already:
-            update["$push"] = {"masterclass_registrations": registration}
+        if already:
+            eng = _engagement_event(
+                "masterclass_reengaged",
+                now,
+                masterclass_id=mc_id,
+                title=title,
+                label=f"Re-engaged · {title}",
+            )
+            update = {
+                "$set": {
+                    "updated_at": now,
+                    "masterclass_registered_at": now,
+                },
+                "$addToSet": {
+                    "products": {"$each": ["Registered", product_tag]},
+                    "contact_numbers": stored,
+                },
+                "$push": {"engagement": eng},
+            }
+        else:
+            eng = _engagement_event(
+                "masterclass_registered",
+                now,
+                masterclass_id=mc_id,
+                title=title,
+                label=f"Registered · {title}",
+            )
+            update = {
+                "$set": {
+                    "updated_at": now,
+                    "masterclass_registered_at": now,
+                },
+                "$addToSet": {
+                    "products": {"$each": ["Registered", product_tag]},
+                    "contact_numbers": stored,
+                },
+                "$push": {
+                    "masterclass_registrations": registration,
+                    "engagement": eng,
+                },
+            }
         leads.update_one({"lead_id": existing["lead_id"]}, update)
         lead_id = existing["lead_id"]
     else:
         sendable, cls, ready = pick_sendable_phone(stored)
         contact = sendable or stored
         name = (username or "").strip() or f"WhatsApp {contact[-4:]}"
+        eng = _engagement_event(
+            "masterclass_registered",
+            now,
+            masterclass_id=mc_id,
+            title=title,
+            label=f"Registered · {title}",
+        )
         lead = {
             "lead_id": str(uuid4()),
             "name": name,
@@ -672,6 +751,7 @@ def register_for_masterclass(
             "pipeline": "nurture",
             "masterclass_registrations": [registration],
             "masterclass_registered_at": now,
+            "engagement": [eng],
             "created_at": now,
             "updated_at": now,
         }

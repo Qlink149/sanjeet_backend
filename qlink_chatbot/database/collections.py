@@ -39,6 +39,11 @@ def ensure_indexes():
             {"name": "masterclasses_id", "unique": True},
         ),
         (masterclasses, [("is_active", -1)], {"name": "masterclasses_active"}),
+        (
+            leads,
+            [("masterclass_registrations.masterclass_id", 1)],
+            {"name": "leads_mc_registration_id"},
+        ),
     ]
     for collection, keys, kwargs in specs:
         try:

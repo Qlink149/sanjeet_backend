@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from qlink_chatbot.database.collections import masterclasses
+from qlink_chatbot.database.collections import leads, masterclasses
 from qlink_chatbot.utils.logger_config import logger
 
 
@@ -19,21 +19,96 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
+def _registrant_counts() -> dict[str, int]:
+    pipeline = [
+        {"$match": {"masterclass_registrations.0": {"$exists": True}}},
+        {"$unwind": "$masterclass_registrations"},
+        {
+            "$group": {
+                "_id": "$masterclass_registrations.masterclass_id",
+                "count": {"$sum": 1},
+            }
+        },
+    ]
+    return {
+        row["_id"]: int(row["count"])
+        for row in leads.aggregate(pipeline)
+        if row.get("_id")
+    }
+
+
 def list_masterclasses() -> list[dict]:
     docs = list(masterclasses.find({}).sort([("is_active", -1), ("updated_at", -1)]))
-    return [_serialize(doc) for doc in docs]
+    counts = _registrant_counts()
+    out = []
+    for doc in docs:
+        item = _serialize(doc)
+        item["registrant_count"] = counts.get(item.get("masterclass_id"), 0)
+        out.append(item)
+    return out
 
 
 def get_masterclass(masterclass_id: str) -> dict | None:
     if not masterclass_id:
         return None
     doc = masterclasses.find_one({"masterclass_id": masterclass_id})
-    return _serialize(doc) if doc else None
+    if not doc:
+        return None
+    item = _serialize(doc)
+    counts = _registrant_counts()
+    item["registrant_count"] = counts.get(masterclass_id, 0)
+    return item
 
 
 def get_active_masterclass() -> dict | None:
     doc = masterclasses.find_one({"is_active": True})
     return _serialize(doc) if doc else None
+
+
+def list_masterclass_registrants(masterclass_id: str) -> list[dict]:
+    """People who have a registration row for this masterclass_id (one seat each)."""
+    if not masterclass_id:
+        return []
+    cursor = leads.find(
+        {"masterclass_registrations.masterclass_id": masterclass_id},
+        {
+            "_id": 0,
+            "lead_id": 1,
+            "name": 1,
+            "contact_number": 1,
+            "source": 1,
+            "masterclass_registrations": 1,
+        },
+    )
+    rows = []
+    for doc in cursor:
+        registered_at = None
+        title = None
+        for reg in doc.get("masterclass_registrations") or []:
+            if not isinstance(reg, dict):
+                continue
+            if reg.get("masterclass_id") != masterclass_id:
+                continue
+            registered_at = reg.get("registered_at")
+            title = reg.get("title")
+            break
+        if isinstance(registered_at, datetime):
+            registered_at = registered_at.isoformat()
+        rows.append(
+            {
+                "lead_id": doc.get("lead_id"),
+                "name": doc.get("name"),
+                "contact_number": doc.get("contact_number"),
+                "source": doc.get("source"),
+                "registered_at": registered_at,
+                "title": title,
+            }
+        )
+    rows.sort(
+        key=lambda r: r.get("registered_at") or "",
+        reverse=True,
+    )
+    return rows
 
 
 def create_masterclass(
@@ -58,7 +133,9 @@ def create_masterclass(
         set_active(masterclass_id)
         return get_masterclass(masterclass_id)
     logger.info("Masterclass created", extra={"masterclass_id": masterclass_id})
-    return _serialize(doc)
+    item = _serialize(doc)
+    item["registrant_count"] = 0
+    return item
 
 
 def update_masterclass(
