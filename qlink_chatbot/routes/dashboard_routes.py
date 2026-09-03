@@ -28,10 +28,18 @@ from qlink_chatbot.database.db_utils import (
 )
 from qlink_chatbot.database.collections import leads
 from qlink_chatbot.database.leads import PIPELINE_VALUES, build_lead_query, get_lead_by_id
+from qlink_chatbot.database.masterclasses import (
+    create_masterclass,
+    delete_masterclass,
+    list_masterclasses,
+    set_active,
+    update_masterclass,
+)
 from qlink_chatbot.utils.env_load import password as pwd
 from qlink_chatbot.utils.env_load import public_base_url
 from qlink_chatbot.utils.env_load import username as us
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.utils.phone import normalize_phone_list
 from qlink_chatbot.whatsapp_functions.dashboard.create_template import (
     create_template,
     upload_template_media,
@@ -450,10 +458,12 @@ async def trigger_campaign_v2(
                 content={"success": False, "message": "Provide file, phone list or category"},
             )
 
-        phones = [
-            r["phone_number"] if category else f"{r['phone_code']}{r['phone_number']}"
-            for r in records
-        ]
+        phones = normalize_phone_list(
+            [
+                r["phone_number"] if category else f"{r['phone_code']}{r['phone_number']}"
+                for r in records
+            ]
+        )
 
         # Preview mode — resolves and counts the audience exactly like a
         # real send would, but never creates a campaign or queues any
@@ -803,6 +813,7 @@ async def fetch_filtered_leads(
     product: str | None = None,
     whatsapp_ready: bool = True,
     no_number: bool = False,
+    not_whatsapp_ready: bool = False,
     search: str = "",
     page: int = 1,
     limit: int = 25,
@@ -820,8 +831,9 @@ async def fetch_filtered_leads(
             pipeline=pipeline,
             product=product,
             source=source,
-            whatsapp_ready_only=whatsapp_ready and not no_number,
+            whatsapp_ready_only=whatsapp_ready and not no_number and not not_whatsapp_ready,
             no_number_only=no_number,
+            not_whatsapp_ready_only=not_whatsapp_ready and not no_number,
         )
         data = await asyncio.to_thread(
             get_filtered_leads, query, search, page, limit
@@ -850,6 +862,119 @@ async def fetch_lead_by_id(lead_id: str):
         logger.exception("Error fetching lead", extra={"exception": e})
         return JSONResponse(
             content={"success": False, "message": "Error fetching person"},
+            status_code=500,
+        )
+
+
+class MasterclassCreate(BaseModel):
+    title: str
+    meeting_link: str
+    notes: str | None = None
+    activate: bool = False
+
+
+class MasterclassUpdate(BaseModel):
+    title: str | None = None
+    meeting_link: str | None = None
+    notes: str | None = None
+
+
+@dashboard_router.get("/masterclasses")
+async def fetch_masterclasses():
+    try:
+        data = await asyncio.to_thread(list_masterclasses)
+        return JSONResponse(content={"success": True, "data": data}, status_code=200)
+    except Exception as e:
+        logger.exception("Error listing masterclasses", extra={"exception": e})
+        return JSONResponse(
+            content={"success": False, "message": "Error listing masterclasses"},
+            status_code=500,
+        )
+
+
+@dashboard_router.post("/masterclasses")
+async def create_masterclass_route(payload: MasterclassCreate):
+    title = (payload.title or "").strip()
+    link = (payload.meeting_link or "").strip()
+    if not title or not link:
+        return JSONResponse(
+            content={"success": False, "message": "Title and meeting link are required"},
+            status_code=400,
+        )
+    try:
+        data = await asyncio.to_thread(
+            create_masterclass,
+            title,
+            link,
+            payload.notes,
+            payload.activate,
+        )
+        return JSONResponse(content={"success": True, "data": data}, status_code=201)
+    except Exception as e:
+        logger.exception("Error creating masterclass", extra={"exception": e})
+        return JSONResponse(
+            content={"success": False, "message": "Error creating masterclass"},
+            status_code=500,
+        )
+
+
+@dashboard_router.patch("/masterclasses/{masterclass_id}")
+async def update_masterclass_route(masterclass_id: str, payload: MasterclassUpdate):
+    try:
+        data = await asyncio.to_thread(
+            update_masterclass,
+            masterclass_id,
+            title=payload.title,
+            meeting_link=payload.meeting_link,
+            notes=payload.notes,
+        )
+        if not data:
+            return JSONResponse(
+                content={"success": False, "message": "Masterclass not found"},
+                status_code=404,
+            )
+        return JSONResponse(content={"success": True, "data": data}, status_code=200)
+    except Exception as e:
+        logger.exception("Error updating masterclass", extra={"exception": e})
+        return JSONResponse(
+            content={"success": False, "message": "Error updating masterclass"},
+            status_code=500,
+        )
+
+
+@dashboard_router.post("/masterclasses/{masterclass_id}/activate")
+async def activate_masterclass_route(masterclass_id: str):
+    try:
+        data = await asyncio.to_thread(set_active, masterclass_id)
+        if not data:
+            return JSONResponse(
+                content={"success": False, "message": "Masterclass not found"},
+                status_code=404,
+            )
+        return JSONResponse(content={"success": True, "data": data}, status_code=200)
+    except Exception as e:
+        logger.exception("Error activating masterclass", extra={"exception": e})
+        return JSONResponse(
+            content={"success": False, "message": "Error activating masterclass"},
+            status_code=500,
+        )
+
+
+@dashboard_router.delete("/masterclasses/{masterclass_id}")
+async def delete_masterclass_route(masterclass_id: str):
+    try:
+        ok, message = await asyncio.to_thread(delete_masterclass, masterclass_id)
+        if not ok:
+            status = 404 if "not found" in message.lower() else 400
+            return JSONResponse(
+                content={"success": False, "message": message},
+                status_code=status,
+            )
+        return JSONResponse(content={"success": True, "message": message}, status_code=200)
+    except Exception as e:
+        logger.exception("Error deleting masterclass", extra={"exception": e})
+        return JSONResponse(
+            content={"success": False, "message": "Error deleting masterclass"},
             status_code=500,
         )
 

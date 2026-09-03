@@ -4,6 +4,7 @@ from qlink_chatbot.database.db_utils import (
     set_campaign_recipient_sent,
 )
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.utils.phone import normalize_phone_list
 from qlink_chatbot.whatsapp_functions.dashboard.get_all_templates import (
     get_all_templates,
 )
@@ -55,6 +56,7 @@ def send_campaign_messages(
     and the automatic scheduler — same send path, same recorded outcome
     either way.
     """
+    phones = normalize_phone_list(phones)
     campaign = campaigns.find_one(
         {"campaign_id": campaign_id},
         {"template_name": 1, "template_id": 1},

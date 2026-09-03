@@ -54,28 +54,41 @@ def format_user(user_message, phone_number):
     """Format the user message to a user assistant way."""
     body = ""
     try:
-        msg_type = user_message["type"]
+        if not isinstance(user_message, dict):
+            return str(user_message or "").strip() or "[message]"
+        msg_type = (user_message.get("type") or "text").lower()
         if msg_type == "text":
-            body = f'{user_message["text"]["body"]}'
+            body = (user_message.get("text") or {}).get("body") or ""
+
+        elif msg_type == "button":
+            body = (user_message.get("button") or {}).get("text") or ""
+            if body:
+                body = f"User Selected - [{body}] from quick reply"
 
         elif msg_type == "interactive":
-            type = user_message["interactive"]["type"]
-            if type == "list_reply":
-                title = user_message["interactive"]["list_reply"]["title"]
+            interactive = user_message.get("interactive") or {}
+            itype = interactive.get("type")
+            if itype == "list_reply":
+                title = (interactive.get("list_reply") or {}).get("title")
                 body = f"User Selected - [{title}] from list"
 
-            elif type == "nfm_reply":
+            elif itype == "nfm_reply":
                 response_json = json.loads(
-                    user_message["interactive"]["nfm_reply"]["response_json"]
+                    (interactive.get("nfm_reply") or {}).get("response_json") or "{}"
                 )
                 body = "Flow Reply - "
                 for key, value in response_json.items():
                     body += f"\n{key}: {value}"
 
-            elif type == "button_reply":
-                title = user_message["interactive"]["button_reply"]["title"]
+            elif itype == "button_reply":
+                title = (interactive.get("button_reply") or {}).get("title")
                 body = f"User Selected - [{title}] from quick reply"
 
+        elif msg_type in {"image", "audio", "document", "sticker", "video", "location"}:
+            body = f"[{msg_type.capitalize()}]"
+
+        if not str(body).strip():
+            body = f"[{msg_type or 'message'}]"
         return body
     except Exception as e:
         logger.exception(

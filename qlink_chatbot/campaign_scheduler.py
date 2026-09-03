@@ -21,6 +21,7 @@ from qlink_chatbot.database.db_utils import (
     sync_expiry_jobs_from_templates,
 )
 from qlink_chatbot.database.leads import build_lead_query
+from qlink_chatbot.utils.phone import normalize_phone_list
 from qlink_chatbot.routes.dashboard_routes import PUBLIC_BASE_URL
 from qlink_chatbot.whatsapp_functions.dashboard.get_all_templates import (
     get_all_templates,
@@ -43,11 +44,13 @@ def _run_one_schedule(sched: dict, run_date: str):
             sub_category=sched.get("sub_category"),
             whatsapp_ready_only=True,
         )
-        phones = [
-            d["contact_number"]
-            for d in leads.find(query, {"contact_number": 1, "_id": 0})
-            if d.get("contact_number")
-        ]
+        phones = normalize_phone_list(
+            [
+                d["contact_number"]
+                for d in leads.find(query, {"contact_number": 1, "_id": 0})
+                if d.get("contact_number")
+            ]
+        )
 
         if not phones:
             mark_schedule_run(schedule_id, None, run_date)

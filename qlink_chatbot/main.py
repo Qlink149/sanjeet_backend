@@ -5,12 +5,27 @@ import os
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 from starlette.requests import Request
 
+from qlink_chatbot.constants import (
+    MASTERCLASS_NO_ACTIVE_REPLY,
+    MASTERCLASS_TRIGGER_PHRASES,
+)
 from qlink_chatbot.database.campaign_analytics import (
     update_campaign_recipient_status,
 )
-from qlink_chatbot.database.db_utils import get_user_profile, save_to_mongo
+from qlink_chatbot.database.db_utils import (
+    append_chat_entries,
+    ensure_user_thread,
+    get_user_profile,
+    save_to_mongo,
+)
+from qlink_chatbot.database.leads import register_for_masterclass, upsert_quiz_lead
+from qlink_chatbot.database.masterclasses import (
+    build_masterclass_reply,
+    get_active_masterclass,
+)
 from qlink_chatbot.processors.response_manager import ResponseManager
 from qlink_chatbot.utils.campaign_status import (
     extract_message_event_ids,
@@ -18,7 +33,10 @@ from qlink_chatbot.utils.campaign_status import (
     extract_status_lookup_ids,
     extract_v3_failure_reason,
 )
+from qlink_chatbot.utils.format_chathistory import format_user
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.utils.phone import inbound_matches_phrases, normalize_wa_phone
+from qlink_chatbot.whatsapp_functions.send_text_message import send_text_message
 
 QUICK_REPLY_RESPONSES = {
     "send sanjeet contact details": (
@@ -33,6 +51,7 @@ def _gupshup_native_to_meta(payload: dict) -> tuple[str, str, dict] | None:
     msg_type = (payload.get("type") or "").lower()
     sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
     phone = str(payload.get("source") or sender.get("phone") or "").strip()
+    phone = normalize_wa_phone(phone) or phone
     username = str(sender.get("name") or "").strip()
     if not phone:
         return None
@@ -85,6 +104,7 @@ async def _save_inbound_chat(
     messages: dict,
     response_manager: ResponseManager,
 ):
+    phone_number = normalize_wa_phone(phone_number) or phone_number
     user_profile = await asyncio.to_thread(get_user_profile, phone_number) or {
         "chat_history": [],
         "service_selected": None,
@@ -95,7 +115,61 @@ async def _save_inbound_chat(
         "whatsapp_username": whatsapp_username,
         "user_profile": user_profile,
     }
-    button_label = _extract_button_label(messages)
+    inbound_text = _extract_button_label(messages) or ""
+    if inbound_matches_phrases(inbound_text, MASTERCLASS_TRIGGER_PHRASES):
+        logger.info(
+            "Masterclass trigger matched",
+            extra={"phone_number": phone_number},
+        )
+        active = await asyncio.to_thread(get_active_masterclass)
+        if active:
+            reply_text = build_masterclass_reply(active)
+        else:
+            reply_text = MASTERCLASS_NO_ACTIVE_REPLY
+        user_content = format_user(messages, phone_number)
+        entries = [
+            {
+                "role": "user",
+                "content": user_content,
+            }
+        ]
+        try:
+            rsp = await asyncio.to_thread(
+                send_text_message,
+                phone_number,
+                {"type": "text", "text": reply_text},
+            )
+        except Exception as e:
+            logger.exception(
+                "Masterclass auto-reply send failed",
+                extra={"phone_number": phone_number, "error": str(e)},
+            )
+            rsp = {"success": False, "message_id": None, "error": str(e)}
+        assistant = {
+            "role": "assistant",
+            "content": reply_text,
+            "status": "submitted" if rsp.get("success") else "failed",
+        }
+        if rsp.get("message_id"):
+            assistant["gupshup_message_id"] = rsp["message_id"]
+        if rsp.get("error"):
+            assistant["error"] = rsp["error"]
+        entries.append(assistant)
+        await asyncio.to_thread(
+            append_chat_entries,
+            phone_number,
+            entries,
+            whatsapp_username or None,
+        )
+        if active:
+            await asyncio.to_thread(
+                register_for_masterclass,
+                phone_number,
+                whatsapp_username or None,
+                active,
+            )
+        return
+    button_label = inbound_text
     quick_reply_text = (
         QUICK_REPLY_RESPONSES.get(button_label.strip().lower())
         if button_label
@@ -310,7 +384,7 @@ async def messages(request: Request):
             return {"status": "success"}
 
         messages = whatsapp_event["messages"][0]
-        phone_number = messages["from"]
+        phone_number = normalize_wa_phone(messages["from"]) or messages["from"]
         whatsapp_username = (
             request_data["entry"][0]["changes"][0]["value"]["contacts"][0][
                 "profile"
@@ -334,3 +408,42 @@ async def messages(request: Request):
         if not phone_number:
             return {"status": "ignored", "reason": "no phone_number"}
         return {"status": "error"}
+
+
+class QuizSubmit(BaseModel):
+    name: str
+    phone: str
+    email: str | None = None
+    archetype: str | None = None
+    answers: dict | None = Field(default=None)
+
+
+@app.post("/quiz/submit")
+async def quiz_submit(payload: QuizSubmit):
+    """Public: persist Money Ceiling Quiz capture, then show archetype in-page."""
+    name = (payload.name or "").strip()
+    phone = (payload.phone or "").strip()
+    if not name or not phone:
+        return {"success": False, "message": "Name and WhatsApp number are required"}
+    email = (payload.email or "").strip() or None
+    try:
+        lead = await asyncio.to_thread(
+            upsert_quiz_lead,
+            name,
+            phone,
+            email,
+            payload.archetype,
+            payload.answers,
+        )
+        stored = (lead or {}).get("contact_number") or normalize_wa_phone(phone) or phone
+        await asyncio.to_thread(ensure_user_thread, stored, name)
+        return {
+            "success": True,
+            "data": {
+                "lead_id": (lead or {}).get("lead_id"),
+                "phone": stored,
+            },
+        }
+    except Exception as e:
+        logger.exception("Quiz submit failed", extra={"error": str(e)})
+        return {"success": False, "message": "Could not save quiz details"}

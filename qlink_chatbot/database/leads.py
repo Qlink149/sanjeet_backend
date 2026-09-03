@@ -4,8 +4,12 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from qlink_chatbot.database.collections import leads
+from qlink_chatbot.database.collections import idac, leads
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.utils.phone import (
+    normalize_wa_phone,
+    pick_sendable_phone,
+)
 
 WA_READY_CLASSES = {
     "india_10",
@@ -96,6 +100,7 @@ def build_lead_query(
     source: str | None = None,
     whatsapp_ready_only: bool = False,
     no_number_only: bool = False,
+    not_whatsapp_ready_only: bool = False,
     expiry_offset_days: int | None = None,
     expiry_date: str | None = None,
 ) -> dict:
@@ -120,6 +125,9 @@ def build_lead_query(
             {"contact_number": None},
             {"contact_number": ""},
         ]
+    elif not_whatsapp_ready_only:
+        query["whatsapp_ready"] = {"$ne": True}
+        query["contact_number"] = {"$nin": [None, ""]}
     elif whatsapp_ready_only:
         query["whatsapp_ready"] = True
         query["contact_number"] = {"$nin": [None, ""]}
@@ -129,10 +137,23 @@ def build_lead_query(
 def _serialize_lead(doc: dict) -> dict:
     doc = dict(doc)
     doc.pop("_id", None)
-    for field in ("created_at", "updated_at"):
+    for field in ("created_at", "updated_at", "masterclass_registered_at"):
         value = doc.get(field)
         if isinstance(value, datetime):
             doc[field] = value.isoformat()
+    regs = doc.get("masterclass_registrations")
+    if isinstance(regs, list):
+        cleaned = []
+        for row in regs:
+            if not isinstance(row, dict):
+                cleaned.append(row)
+                continue
+            item = dict(row)
+            at = item.get("registered_at")
+            if isinstance(at, datetime):
+                item["registered_at"] = at.isoformat()
+            cleaned.append(item)
+        doc["masterclass_registrations"] = cleaned
     return doc
 
 
@@ -159,6 +180,7 @@ def get_filtered_leads(query: dict, search: str = "", page: int = 1, limit: int 
                     {"name": pattern},
                     {"email": pattern},
                     {"contact_number": pattern},
+                    {"contact_numbers": pattern},
                     {"aka": pattern},
                 ]
             }
@@ -217,6 +239,15 @@ def get_lead_stats():
                     },
                     {"$count": "n"},
                 ],
+                "not_whatsapp_ready": [
+                    {
+                        "$match": {
+                            "whatsapp_ready": {"$ne": True},
+                            "contact_number": {"$nin": [None, ""]},
+                        }
+                    },
+                    {"$count": "n"},
+                ],
                 "products": [
                     {
                         "$unwind": {
@@ -259,6 +290,7 @@ def get_lead_stats():
         "converted": pipelines.get("converted", 0),
         "nurture": pipelines.get("nurture", 0),
         "no_number": _facet_count(facet.get("no_number") or []),
+        "not_whatsapp_ready": _facet_count(facet.get("not_whatsapp_ready") or []),
         "pipelines": pipelines,
         "products": dict(sorted(products.items(), key=lambda kv: -kv[1])),
         "sources": dict(sorted(sources.items(), key=lambda kv: -kv[1])),
@@ -318,17 +350,28 @@ def _person_from_rows(rows: list[dict], now: datetime) -> dict:
             }
         )
 
-    phone_class = latest.get("phone_class")
-    contact_number = latest.get("contact_number")
+    sendable, phone_class, ready = pick_sendable_phone(
+        contact_numbers, latest.get("contact_number")
+    )
+    stored_numbers = []
+    seen_stored = set()
+    for num in contact_numbers:
+        n = normalize_wa_phone(num) or num
+        if n and n not in seen_stored:
+            seen_stored.add(n)
+            stored_numbers.append(n)
+    if sendable and sendable not in seen_stored:
+        stored_numbers.insert(0, sendable)
+    contact_number = sendable or latest.get("contact_number")
     return {
         "lead_id": str(uuid4()),
         "name": primary_name,
         "aka": aka,
         "email": email,
         "contact_number": contact_number,
-        "contact_numbers": contact_numbers,
+        "contact_numbers": stored_numbers,
         "phone_class": phone_class,
-        "whatsapp_ready": bool(contact_number) and is_whatsapp_ready(phone_class),
+        "whatsapp_ready": bool(contact_number) and ready,
         "source": latest.get("source"),
         "products": products,
         "product_raw": latest.get("product"),
@@ -356,7 +399,10 @@ def import_coachee_json(payload: dict, replace: bool = True) -> dict:
     no_phone = []
     for row in rows:
         phone = row.get("contact_number")
-        if phone:
+        key = normalize_wa_phone(phone) if phone else ""
+        if key:
+            by_phone[key].append(row)
+        elif phone:
             by_phone[phone].append(row)
         else:
             no_phone.append(row)
@@ -393,3 +439,273 @@ def import_coachee_json(payload: dict, replace: bool = True) -> dict:
         "no_number": len(no_phone),
         "stats": stats,
     }
+
+
+def _lead_sort_key(doc: dict):
+    return doc.get("updated_at") or doc.get("created_at") or datetime.min.replace(
+        tzinfo=timezone.utc
+    )
+
+
+def recompute_lead_phones() -> dict:
+    """Normalize numbers, promote a sendable India/UAE number, merge duplicates."""
+    now = datetime.now(timezone.utc)
+    docs = list(leads.find({}))
+    groups = defaultdict(list)
+    no_key = []
+    for doc in docs:
+        sendable, cls, ready = pick_sendable_phone(
+            doc.get("contact_number"), doc.get("contact_numbers")
+        )
+        if sendable:
+            groups[sendable].append((doc, cls, ready, sendable))
+        else:
+            no_key.append((doc, cls, ready))
+
+    rewritten = 0
+    merged = 0
+    for key, items in groups.items():
+        items.sort(key=lambda pair: _lead_sort_key(pair[0]))
+        keeper_doc, cls, ready, sendable = items[-1]
+        numbers = []
+        seen = set()
+        names = []
+        aka = []
+        products = []
+        seen_prod = set()
+        history = list(keeper_doc.get("history") or [])
+        for doc, _, _, _ in items:
+            for num in [doc.get("contact_number"), *(doc.get("contact_numbers") or [])]:
+                n = normalize_wa_phone(num) or num
+                if n and n not in seen:
+                    seen.add(n)
+                    numbers.append(n)
+            name = (doc.get("name") or "").strip()
+            if name and name not in names:
+                names.append(name)
+            for extra in doc.get("aka") or []:
+                if extra and extra not in aka and extra not in names:
+                    aka.append(extra)
+            for tag in doc.get("products") or []:
+                if tag and tag not in seen_prod:
+                    seen_prod.add(tag)
+                    products.append(tag)
+            if doc is not keeper_doc:
+                history.extend(doc.get("history") or [])
+        if sendable and sendable not in seen:
+            numbers.insert(0, sendable)
+        primary_name = names[-1] if names else keeper_doc.get("name")
+        extra_aka = [n for n in names if n != primary_name] + aka
+        set_fields = {
+            "contact_number": sendable,
+            "contact_numbers": numbers,
+            "phone_class": cls,
+            "whatsapp_ready": ready,
+            "updated_at": now,
+        }
+        if primary_name:
+            set_fields["name"] = primary_name
+        if extra_aka:
+            set_fields["aka"] = extra_aka
+        if products:
+            set_fields["products"] = products
+        if history:
+            set_fields["history"] = history
+        extra_ids = [pair[0]["_id"] for pair in items[:-1]]
+        unchanged = (
+            not extra_ids
+            and keeper_doc.get("contact_number") == sendable
+            and keeper_doc.get("whatsapp_ready") == ready
+            and keeper_doc.get("phone_class") == cls
+        )
+        if unchanged:
+            continue
+        # Delete extras first so the unique contact_number index is free.
+        if extra_ids:
+            leads.delete_many({"_id": {"$in": extra_ids}})
+            merged += 1
+        leads.update_one({"_id": keeper_doc["_id"]}, {"$set": set_fields})
+        rewritten += 1
+
+    for doc, cls, ready in no_key:
+        if doc.get("whatsapp_ready") is False and doc.get("phone_class") == cls:
+            continue
+        leads.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "phone_class": cls,
+                    "whatsapp_ready": False,
+                    "updated_at": now,
+                }
+            },
+        )
+        rewritten += 1
+
+    logger.info(
+        "Recomputed lead phones",
+        extra={"rewritten": rewritten, "merged_groups": merged},
+    )
+    return {"rewritten": rewritten, "merged_groups": merged}
+
+
+def upsert_quiz_lead(
+    name: str,
+    phone: str,
+    email: str | None,
+    archetype: str | None,
+    answers: dict | None,
+) -> dict:
+    sendable, cls, ready = pick_sendable_phone(phone)
+    stored = sendable or normalize_wa_phone(phone)
+    now = datetime.now(timezone.utc)
+    existing = None
+    if stored:
+        existing = leads.find_one(
+            {
+                "$or": [
+                    {"contact_number": stored},
+                    {"contact_numbers": stored},
+                    {"contact_number": phone},
+                ]
+            }
+        )
+    payload = {
+        "name": name,
+        "email": email or None,
+        "contact_number": stored or None,
+        "phone_class": cls,
+        "whatsapp_ready": ready,
+        "source": "Money Ceiling Quiz",
+        "quiz_archetype": archetype,
+        "quiz_answers": answers or {},
+        "updated_at": now,
+    }
+    if existing:
+        update = {"$set": payload}
+        if stored:
+            update["$addToSet"] = {"contact_numbers": stored}
+        leads.update_one({"lead_id": existing["lead_id"]}, update)
+        return get_lead_by_id(existing["lead_id"])
+    lead = {
+        **payload,
+        "lead_id": str(uuid4()),
+        "contact_numbers": [stored] if stored else [],
+        "aka": [],
+        "products": [],
+        "pipeline": "nurture",
+        "created_at": now,
+    }
+    leads.insert_one(lead)
+    return get_lead_by_id(lead["lead_id"])
+
+
+def register_for_masterclass(
+    phone: str,
+    username: str | None,
+    masterclass: dict,
+) -> dict | None:
+    """Create or update a People row for the Active masterclass registration."""
+    stored = normalize_wa_phone(phone) or phone
+    if not stored or not masterclass:
+        return None
+    mc_id = masterclass.get("masterclass_id")
+    title = (masterclass.get("title") or "Masterclass").strip()
+    link = (masterclass.get("meeting_link") or "").strip()
+    if not mc_id or not link:
+        return None
+
+    now = datetime.now(timezone.utc)
+    product_tag = f"MC · {title}"
+    registration = {
+        "masterclass_id": mc_id,
+        "title": title,
+        "registered_at": now,
+        "meeting_link": link,
+    }
+
+    existing = leads.find_one(
+        {
+            "$or": [
+                {"contact_number": stored},
+                {"contact_numbers": stored},
+            ]
+        }
+    )
+    already = False
+    if existing:
+        for row in existing.get("masterclass_registrations") or []:
+            if isinstance(row, dict) and row.get("masterclass_id") == mc_id:
+                already = True
+                break
+
+    if existing:
+        update: dict = {
+            "$set": {
+                "updated_at": now,
+                "masterclass_registered_at": now,
+            },
+            "$addToSet": {
+                "products": {"$each": ["Registered", product_tag]},
+                "contact_numbers": stored,
+            },
+        }
+        if not already:
+            update["$push"] = {"masterclass_registrations": registration}
+        leads.update_one({"lead_id": existing["lead_id"]}, update)
+        lead_id = existing["lead_id"]
+    else:
+        sendable, cls, ready = pick_sendable_phone(stored)
+        contact = sendable or stored
+        name = (username or "").strip() or f"WhatsApp {contact[-4:]}"
+        lead = {
+            "lead_id": str(uuid4()),
+            "name": name,
+            "aka": [],
+            "email": None,
+            "contact_number": contact,
+            "contact_numbers": [contact],
+            "phone_class": cls,
+            "whatsapp_ready": ready,
+            "source": "WhatsApp Masterclass",
+            "products": ["Registered", product_tag],
+            "pipeline": "nurture",
+            "masterclass_registrations": [registration],
+            "masterclass_registered_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        leads.insert_one(lead)
+        lead_id = lead["lead_id"]
+
+    user_set = {
+        "masterclass_registered_at": now,
+        "masterclass_id": mc_id,
+        "updated_at": now,
+        "phone_number": stored,
+    }
+    if username:
+        user_set["username"] = username
+    idac.update_one(
+        {"phone_number": stored},
+        {
+            "$set": user_set,
+            "$setOnInsert": {
+                "created_at": now,
+                "chat_history": [],
+                "service_selected": None,
+            },
+        },
+        upsert=True,
+    )
+    return get_lead_by_id(lead_id)
+
+
+def mark_masterclass_registered(phone: str) -> None:
+    """Deprecated: use register_for_masterclass with the Active masterclass."""
+    logger.warning(
+        "mark_masterclass_registered called without masterclass context",
+        extra={"phone": phone},
+    )
+
+

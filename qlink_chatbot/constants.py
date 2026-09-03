@@ -32,3 +32,15 @@ SKIP_FIELDS_LOGGER = (
 AWAZ_ROUTE = "https://api.awaz.ai/v1"
 AWAZ_SOURCE = "+12315005708"
 CALLCHIMP_ROUTE = "https://api.callchimp.ai/v1"
+
+MASTERCLASS_TRIGGER_PHRASES = (
+    "send me the link",
+    "im ready for the masterclass",
+    "i'm ready for the masterclass",
+)
+# Meeting URL lives on the Active masterclass in Mongo (dashboard-owned).
+# Keep these phrases in sync with the quiz WhatsApp CTA prefill.
+MASTERCLASS_NO_ACTIVE_REPLY = (
+    "Thanks for your interest! There isn't a live masterclass link right now. "
+    "Sanjeet will share one soon."
+)

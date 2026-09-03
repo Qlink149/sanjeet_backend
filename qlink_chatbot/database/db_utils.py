@@ -21,8 +21,21 @@ from qlink_chatbot.database.leads import (
 )
 from qlink_chatbot.utils.format_chathistory import format_assistant, format_user
 from qlink_chatbot.utils.logger_config import logger
+from qlink_chatbot.utils.phone import normalize_wa_phone
 
 from uuid import uuid4
+
+
+def _json_safe(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def mongo_search(query, collection):
@@ -44,6 +57,7 @@ def append_chat_entries(
     username: str | None = None,
 ):
     """Append standalone chat rows (user and/or assistant) without rewriting history."""
+    phone_number = normalize_wa_phone(phone_number) or phone_number
     if not phone_number or not entries:
         return
     now = datetime.now(timezone.utc)
@@ -66,6 +80,87 @@ def append_chat_entries(
     if username:
         update["$set"]["username"] = username
     idac.update_one({"phone_number": phone_number}, update, upsert=True)
+
+
+def ensure_user_thread(phone_number: str, username: str | None = None):
+    """Create an empty inbox thread so quiz leads show up before they message."""
+    phone_number = normalize_wa_phone(phone_number) or phone_number
+    if not phone_number:
+        return
+    now = datetime.now(timezone.utc)
+    update = {
+        "$set": {"updated_at": now, "phone_number": phone_number},
+        "$setOnInsert": {
+            "created_at": now,
+            "chat_history": [],
+            "service_selected": None,
+        },
+    }
+    if username:
+        update["$set"]["username"] = username
+    idac.update_one({"phone_number": phone_number}, update, upsert=True)
+
+
+def _history_sort_key(msg: dict):
+    at = msg.get("at") if isinstance(msg, dict) else None
+    if isinstance(at, datetime):
+        return at
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def merge_split_user_threads() -> dict:
+    """Collapse 9820… / 919820… (and UAE short vs 971…) into one users doc."""
+    groups = defaultdict(list)
+    for doc in idac.find({}):
+        raw = doc.get("phone_number") or ""
+        key = normalize_wa_phone(raw) or raw
+        if not key:
+            continue
+        groups[key].append(doc)
+
+    rewritten = 0
+    merged = 0
+    for key, docs in groups.items():
+        docs.sort(
+            key=lambda d: d.get("created_at")
+            or d.get("updated_at")
+            or datetime.min.replace(tzinfo=timezone.utc)
+        )
+        keeper = docs[0]
+        if len(docs) == 1:
+            if keeper.get("phone_number") != key:
+                idac.update_one(
+                    {"_id": keeper["_id"]},
+                    {"$set": {"phone_number": key}},
+                )
+                rewritten += 1
+            continue
+        history = []
+        username = keeper.get("username")
+        for doc in docs:
+            history.extend(doc.get("chat_history") or [])
+            if not username:
+                username = doc.get("username")
+        history.sort(key=_history_sort_key)
+        now = datetime.now(timezone.utc)
+        set_fields = {
+            "phone_number": key,
+            "chat_history": history,
+            "updated_at": now,
+        }
+        if username:
+            set_fields["username"] = username
+        idac.update_one({"_id": keeper["_id"]}, {"$set": set_fields})
+        extra_ids = [d["_id"] for d in docs[1:]]
+        if extra_ids:
+            idac.delete_many({"_id": {"$in": extra_ids}})
+        merged += 1
+    if rewritten or merged:
+        logger.info(
+            "Merged split inbox threads",
+            extra={"rewritten": rewritten, "merged_groups": merged},
+        )
+    return {"rewritten": rewritten, "merged_groups": merged}
 
 
 def update_outbound_chat_status(
@@ -183,6 +278,7 @@ def save_user_profile(phone_number: str, profile_data: dict):
 def get_user_profile(phone_number: str):
     """Get User Profile data."""
     try:
+        phone_number = normalize_wa_phone(phone_number) or phone_number
         profile = idac.find_one({"phone_number": phone_number})
 
         if not profile:
@@ -215,7 +311,7 @@ def get_doc_by_id(doc_id: str):
             "_id": str(doc["_id"]),
             "phone_number": doc.get("phone_number", ""),
             "username": doc.get("username", ""),
-            "chat_history": doc.get("chat_history", []),
+            "chat_history": _json_safe(doc.get("chat_history", [])),
             "service_selected": doc.get("service_selected", ""),
             "updated_at": (
                 doc["updated_at"].isoformat()

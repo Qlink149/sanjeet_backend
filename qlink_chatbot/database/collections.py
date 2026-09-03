@@ -6,6 +6,7 @@ campaigns = db["campaigns"]
 leads = db["leads"]
 template_images = db["template_images"]
 campaign_schedules = db["campaign_schedules"]
+masterclasses = db["masterclasses"]
 
 
 def ensure_indexes():
@@ -32,6 +33,12 @@ def ensure_indexes():
             {"name": "campaigns_gs_message_id"},
         ),
         (campaigns, [("created_at", -1)], {"name": "campaigns_created_at"}),
+        (
+            masterclasses,
+            [("masterclass_id", 1)],
+            {"name": "masterclasses_id", "unique": True},
+        ),
+        (masterclasses, [("is_active", -1)], {"name": "masterclasses_active"}),
     ]
     for collection, keys, kwargs in specs:
         try:
@@ -41,3 +48,14 @@ def ensure_indexes():
                 "Could not ensure index",
                 extra={"index": kwargs.get("name"), "error": str(e)},
             )
+    try:
+        from qlink_chatbot.database.db_utils import merge_split_user_threads
+        from qlink_chatbot.database.leads import recompute_lead_phones
+
+        merge_split_user_threads()
+        recompute_lead_phones()
+    except Exception as e:
+        logger.warning(
+            "Could not merge/recompute phone records",
+            extra={"error": str(e)},
+        )
