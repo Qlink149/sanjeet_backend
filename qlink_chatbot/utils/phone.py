@@ -116,3 +116,16 @@ def inbound_matches_phrases(text: str | None, phrases: tuple[str, ...] | list[st
     if not haystack:
         return False
     return any(normalize_trigger_text(p) in haystack for p in phrases)
+
+
+def inbound_matches_masterclass_trigger(
+    text: str | None,
+    phrases: tuple[str, ...] | list[str],
+) -> bool:
+    """Quiz CTA phrases (substring) or exact Yes quick-reply (not 'yesterday')."""
+    haystack = normalize_trigger_text(text)
+    if not haystack:
+        return False
+    if haystack == "yes":
+        return True
+    return any(normalize_trigger_text(p) in haystack for p in phrases)

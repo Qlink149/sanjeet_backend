@@ -35,7 +35,10 @@ from qlink_chatbot.utils.campaign_status import (
 )
 from qlink_chatbot.utils.format_chathistory import format_user
 from qlink_chatbot.utils.logger_config import logger
-from qlink_chatbot.utils.phone import inbound_matches_phrases, normalize_wa_phone
+from qlink_chatbot.utils.phone import (
+    inbound_matches_masterclass_trigger,
+    normalize_wa_phone,
+)
 from qlink_chatbot.whatsapp_functions.send_text_message import send_text_message
 
 QUICK_REPLY_RESPONSES = {
@@ -116,7 +119,7 @@ async def _save_inbound_chat(
         "user_profile": user_profile,
     }
     inbound_text = _extract_button_label(messages) or ""
-    if inbound_matches_phrases(inbound_text, MASTERCLASS_TRIGGER_PHRASES):
+    if inbound_matches_masterclass_trigger(inbound_text, MASTERCLASS_TRIGGER_PHRASES):
         logger.info(
             "Masterclass trigger matched",
             extra={"phone_number": phone_number},
