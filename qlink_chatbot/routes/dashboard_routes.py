@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from starlette.requests import Request
 
 from qlink_chatbot.database.db_utils import (
+    append_chat_entries,
     get_all_docs_dashboard,
     get_doc_by_id,
     create_campaign,
@@ -40,11 +41,12 @@ from qlink_chatbot.utils.env_load import password as pwd
 from qlink_chatbot.utils.env_load import public_base_url
 from qlink_chatbot.utils.env_load import username as us
 from qlink_chatbot.utils.logger_config import logger
-from qlink_chatbot.utils.phone import normalize_phone_list
+from qlink_chatbot.utils.phone import normalize_phone_list, normalize_wa_phone
 from qlink_chatbot.whatsapp_functions.dashboard.create_template import (
     create_template,
     upload_template_media,
 )
+from qlink_chatbot.whatsapp_functions.send_text_message import send_text_message
 from qlink_chatbot.whatsapp_functions.dashboard.delete_template import (
     delete_template_by_name,
 )
@@ -134,7 +136,87 @@ async def fetch_all_docs(page: int = 1, limit: int = 20, search: str = ""):
             content={"success": False, "message": "Error fetching documents"},
             status_code=500,
         )
-    
+
+
+class ChatSendPayload(BaseModel):
+    doc_id: str
+    text: str
+
+
+@dashboard_router.post("/chat/send")
+async def send_chat_message(payload: ChatSendPayload):
+    """Session text from Inbox composer (24h customer-care window required)."""
+    text = (payload.text or "").strip()
+    doc_id = (payload.doc_id or "").strip()
+    if not doc_id or not text:
+        return JSONResponse(
+            content={"success": False, "message": "doc_id and text are required"},
+            status_code=400,
+        )
+    try:
+        doc = await asyncio.to_thread(get_doc_by_id, doc_id)
+        if not doc:
+            return JSONResponse(
+                content={"success": False, "message": "Chat thread not found"},
+                status_code=404,
+            )
+        phone = normalize_wa_phone(doc.get("phone_number")) or doc.get("phone_number")
+        if not phone:
+            return JSONResponse(
+                content={"success": False, "message": "Thread has no phone number"},
+                status_code=400,
+            )
+        try:
+            rsp = await asyncio.to_thread(
+                send_text_message,
+                phone,
+                {"type": "text", "text": text},
+            )
+        except Exception as e:
+            logger.exception(
+                "Inbox send failed",
+                extra={"phone_number": phone, "error": str(e)},
+            )
+            rsp = {"success": False, "message_id": None, "error": str(e)}
+
+        assistant = {
+            "role": "assistant",
+            "content": text,
+            "status": "submitted" if rsp.get("success") else "failed",
+        }
+        if rsp.get("message_id"):
+            assistant["gupshup_message_id"] = rsp["message_id"]
+        if rsp.get("error"):
+            assistant["error"] = rsp["error"]
+
+        await asyncio.to_thread(
+            append_chat_entries,
+            phone,
+            [assistant],
+            doc.get("username") or None,
+        )
+        if not rsp.get("success"):
+            return JSONResponse(
+                content={
+                    "success": False,
+                    "message": rsp.get("error")
+                    or "Send failed (outside 24h window or provider error)",
+                    "data": assistant,
+                },
+                status_code=400,
+            )
+        return JSONResponse(
+            content={"success": True, "data": assistant},
+            status_code=200,
+        )
+    except Exception as e:
+        logger.exception("Error sending chat message", extra={"exception": e})
+        return JSONResponse(
+            content={"success": False, "message": "Error sending message"},
+            status_code=500,
+        )
+
+
 @dashboard_router.get("/chat/{doc_id}")
 async def fetch_doc_by_id(doc_id: str):
     """Fetch a document by its _id."""
