@@ -38,11 +38,15 @@ MASTERCLASS_TRIGGER_PHRASES = (
     "im ready for the masterclass",
     "i'm ready for the masterclass",
 )
-# Meeting URL lives on the Active masterclass in Mongo (dashboard-owned).
+# WhatsApp message body lives on the Active masterclass in Mongo (dashboard-owned).
 # Keep these phrases in sync with the quiz WhatsApp CTA prefill.
 # Exact inbound "Yes" (Utility QR after quiz) is handled separately in
 # inbound_matches_masterclass_trigger — do not add "yes" as a substring phrase.
 MASTERCLASS_NO_ACTIVE_REPLY = (
     "Thanks for your interest! There isn't a live masterclass link right now. "
     "Sanjeet will share one soon."
+)
+MASTERCLASS_EMPTY_MESSAGE_REPLY = (
+    "Thanks for your interest! The masterclass details aren't ready yet. "
+    "Sanjeet will share them soon."
 )

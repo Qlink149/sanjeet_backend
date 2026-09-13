@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from qlink_chatbot.constants import (
+    MASTERCLASS_EMPTY_MESSAGE_REPLY,
     MASTERCLASS_NO_ACTIVE_REPLY,
     MASTERCLASS_TRIGGER_PHRASES,
 )
@@ -167,8 +168,13 @@ async def _save_inbound_chat(
             extra={"phone_number": phone_number},
         )
         active = await asyncio.to_thread(get_active_masterclass)
+        sent_masterclass = False
         if active:
             reply_text = build_masterclass_reply(active)
+            if reply_text:
+                sent_masterclass = True
+            else:
+                reply_text = MASTERCLASS_EMPTY_MESSAGE_REPLY
         else:
             reply_text = MASTERCLASS_NO_ACTIVE_REPLY
         user_content = format_user(messages, phone_number)
@@ -206,7 +212,7 @@ async def _save_inbound_chat(
             entries,
             whatsapp_username or None,
         )
-        if active:
+        if sent_masterclass:
             await asyncio.to_thread(
                 register_for_masterclass,
                 phone_number,

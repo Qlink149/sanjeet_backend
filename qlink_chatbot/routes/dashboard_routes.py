@@ -996,7 +996,7 @@ async def create_masterclass_route(payload: MasterclassCreate):
     link = (payload.meeting_link or "").strip()
     if not title or not link:
         return JSONResponse(
-            content={"success": False, "message": "Title and meeting link are required"},
+            content={"success": False, "message": "Title and WhatsApp message are required"},
             status_code=400,
         )
     try:

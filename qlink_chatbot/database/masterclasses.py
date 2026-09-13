@@ -19,6 +19,10 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
+def _normalize_message_body(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
 def _registrant_counts() -> dict[str, int]:
     pipeline = [
         {"$match": {"masterclass_registrations.0": {"$exists": True}}},
@@ -122,7 +126,7 @@ def create_masterclass(
     doc = {
         "masterclass_id": masterclass_id,
         "title": title.strip(),
-        "meeting_link": meeting_link.strip(),
+        "meeting_link": _normalize_message_body(meeting_link),
         "notes": (notes or "").strip() or None,
         "is_active": False,
         "created_at": now,
@@ -152,7 +156,7 @@ def update_masterclass(
     if title is not None:
         fields["title"] = title.strip()
     if meeting_link is not None:
-        fields["meeting_link"] = meeting_link.strip()
+        fields["meeting_link"] = _normalize_message_body(meeting_link)
     if notes is not None:
         fields["notes"] = notes.strip() or None
     masterclasses.update_one({"masterclass_id": masterclass_id}, {"$set": fields})
@@ -193,6 +197,4 @@ def delete_masterclass(masterclass_id: str) -> tuple[bool, str]:
 
 
 def build_masterclass_reply(mc: dict) -> str:
-    title = (mc.get("title") or "the masterclass").strip()
-    link = (mc.get("meeting_link") or "").strip()
-    return f"Here's the link for {title}: {link}"
+    return _normalize_message_body(mc.get("meeting_link") or "")
