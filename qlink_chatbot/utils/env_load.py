@@ -36,8 +36,8 @@ fist_awards_template_id_v2 = os.environ.get("FIST_AWARDS_TEMPLATE_ID_V2")
 fist_awards_template_id_v3 = os.environ.get("FIST_AWARDS_TEMPLATE_ID_V3")
 fist_awards_template_id_v4 = os.environ.get("FIST_AWARDS_TEMPLATE_ID_V4")
 
-# Utility template sent after Money Ceiling Quiz details submit (`access`).
+# Utility template sent after Money Ceiling Quiz details submit (`access_yes`).
 quiz_submit_template_id = (
     os.environ.get("QUIZ_SUBMIT_TEMPLATE_ID")
-    or "f3ac41fb-70d0-45af-8078-d27ef8579129"
+    or "bb2a2c86-87f0-4201-a108-d55e38dc3da6"
 )

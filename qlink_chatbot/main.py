@@ -53,12 +53,12 @@ QUICK_REPLY_RESPONSES = {
 
 QUIZ_ACCESS_TEMPLATE_BODY = (
     "Thank you for completing the Money Archetype Quiz. "
-    "Your Masterclass access has been unlocked. Tap below for your link."
+    "Your Masterclass access has been unlocked. Tap Yes to receive the link."
 )
 
 
 def _send_quiz_submit_template(phone: str, username: str | None) -> None:
-    """Fire Utility `access` after quiz capture; never raises to the request."""
+    """Fire Utility `access_yes` after quiz capture; never raises to the request."""
     template_id = (quiz_submit_template_id or "").strip()
     if not phone or not template_id:
         return
@@ -75,7 +75,7 @@ def _send_quiz_submit_template(phone: str, username: str | None) -> None:
         "content": QUIZ_ACCESS_TEMPLATE_BODY,
         "status": "submitted" if rsp.get("success") else "failed",
         "template_id": template_id,
-        "template_name": "access",
+        "template_name": "access_yes",
     }
     if rsp.get("message_id"):
         assistant["gupshup_message_id"] = rsp["message_id"]
