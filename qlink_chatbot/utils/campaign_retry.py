@@ -19,6 +19,13 @@ DEFAULT_RETRY_DELAY_HOURS = 3
 MAX_RETRIES_PER_CRON = 40
 FAILED_STATUSES = frozenset({"failed", "undelivered"})
 CLAIM_STALE_MINUTES = 15
+RETRY_COUNT_PENDING_QUERY = {
+    "$or": [
+        {"retry_count": {"$exists": False}},
+        {"retry_count": None},
+        {"retry_count": 0},
+    ]
+}
 
 PERMANENT_ERROR_MARKERS = (
     "[1002]",
@@ -207,7 +214,7 @@ def claim_due_recipient() -> dict | None:
                 "$elemMatch": {
                     "status": {"$in": list(FAILED_STATUSES)},
                     "retry_at": {"$lte": now},
-                    "retry_count": {"$lt": 1},
+                    **RETRY_COUNT_PENDING_QUERY,
                     "retry_in_progress": {"$ne": True},
                 }
             }
@@ -240,7 +247,7 @@ def claim_due_recipient() -> dict | None:
                         "phone_number": phone,
                         "status": {"$in": list(FAILED_STATUSES)},
                         "retry_at": {"$lte": now},
-                        "retry_count": {"$lt": 1},
+                        **RETRY_COUNT_PENDING_QUERY,
                         "retry_in_progress": {"$ne": True},
                     }
                 },
@@ -442,6 +449,7 @@ def backfill_recipient_retries(
                     "$set": {
                         f"recipients.{i}.failed_at": failed_at,
                         f"recipients.{i}.retry_at": retry_at,
+                        f"recipients.{i}.retry_count": rec.get("retry_count") or 0,
                     },
                     "$push": {f"recipients.{i}.attempts": attempt},
                 },
