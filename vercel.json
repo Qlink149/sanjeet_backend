@@ -4,6 +4,10 @@
     {
       "path": "/dashboard/cron/schedules",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/dashboard/cron/campaign-retries",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

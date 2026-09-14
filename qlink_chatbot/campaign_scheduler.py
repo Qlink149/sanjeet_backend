@@ -16,13 +16,12 @@ from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.database.db_utils import (
     create_campaign,
     get_due_schedules,
-    get_template_image,
     mark_schedule_run,
     sync_expiry_jobs_from_templates,
 )
 from qlink_chatbot.database.leads import build_lead_query
 from qlink_chatbot.utils.phone import normalize_phone_list
-from qlink_chatbot.routes.dashboard_routes import PUBLIC_BASE_URL
+from qlink_chatbot.utils.template_image import resolve_template_image_url
 from qlink_chatbot.whatsapp_functions.dashboard.get_all_templates import (
     get_all_templates,
 )
@@ -67,9 +66,7 @@ def _run_one_schedule(sched: dict, run_date: str):
         )
         campaign_id = create_campaign(template_id, template_name, phones)
 
-        image_url = None
-        if PUBLIC_BASE_URL and get_template_image(template_id) is not None:
-            image_url = f"{PUBLIC_BASE_URL}/dashboard/template-image/{template_id}"
+        image_url = resolve_template_image_url(template_id)
 
         send_campaign_messages(campaign_id, phones, template_id, image_url)
 

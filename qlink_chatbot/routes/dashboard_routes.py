@@ -66,6 +66,18 @@ class LoginData(BaseModel):
 
 dashboard_router = APIRouter()
 
+def _verify_cron_secret(request: Request) -> JSONResponse | None:
+    secret = os.environ.get("CRON_SECRET")
+    if secret:
+        auth = request.headers.get("authorization") or ""
+        if auth != f"Bearer {secret}":
+            return JSONResponse(
+                {"success": False, "message": "Unauthorized"},
+                status_code=401,
+            )
+    return None
+
+
 @dashboard_router.get("/cron/schedules")
 def cron_run_schedules(request: Request):
     """Vercel Cron tick for delayed/expiry campaign sends.
@@ -74,15 +86,25 @@ def cron_run_schedules(request: Request):
     this path on a schedule. If CRON_SECRET is set, require
     Authorization: Bearer <CRON_SECRET> (Vercel sends this automatically).
     """
-    secret = os.environ.get("CRON_SECRET")
-    if secret:
-        auth = request.headers.get("authorization") or ""
-        if auth != f"Bearer {secret}":
-            return JSONResponse({"success": False, "message": "Unauthorized"}, status_code=401)
+    denied = _verify_cron_secret(request)
+    if denied:
+        return denied
     from qlink_chatbot.campaign_scheduler import run_due_schedules
 
     run_due_schedules()
     return JSONResponse({"success": True})
+
+
+@dashboard_router.get("/cron/campaign-retries")
+def cron_run_campaign_retries(request: Request):
+    """Vercel Cron tick for auto-retrying retriable campaign failures."""
+    denied = _verify_cron_secret(request)
+    if denied:
+        return denied
+    from qlink_chatbot.utils.campaign_retry import run_due_campaign_retries
+
+    summary = run_due_campaign_retries()
+    return JSONResponse({"success": True, **summary})
 
 
 @dashboard_router.get("/ping")
@@ -580,9 +602,10 @@ async def trigger_campaign_v2(
         # Uses a hardcoded public domain rather than request.base_url, since
         # that can resolve to an internal address depending on how TLS
         # termination/proxying in front of the server is configured.
-        image_url = None
-        if PUBLIC_BASE_URL and await asyncio.to_thread(get_template_image, template_id) is not None:
-            image_url = f"{PUBLIC_BASE_URL}/dashboard/template-image/{template_id}"
+        from qlink_chatbot.utils.template_image import resolve_template_image_url
+
+        image_url = await asyncio.to_thread(resolve_template_image_url, template_id)
+        if image_url:
             logger.info(
                 "Resolved header image for campaign trigger",
                 extra={"template_id": template_id, "image_url": image_url},

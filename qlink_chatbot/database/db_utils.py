@@ -573,6 +573,22 @@ FEEDBACK_QUESTIONS = {
 # Campaign Analytics
 # ──────────────────────────────────────────────
 
+def _default_recipient(phone: str) -> dict:
+    return {
+        "phone_number": phone,
+        "status": "pending",
+        "gupshup_message_id": None,
+        "whatsapp_message_id": None,
+        "error": None,
+        "failed_at": None,
+        "retry_at": None,
+        "retry_count": 0,
+        "last_attempt_at": None,
+        "retry_in_progress": False,
+        "attempts": [],
+    }
+
+
 def create_campaign(template_id: str, template_name: str, recipients: list) -> str:
     """Creates a campaign record with one pending entry per recipient phone number."""
     campaign_id = str(uuid4())
@@ -580,14 +596,8 @@ def create_campaign(template_id: str, template_name: str, recipients: list) -> s
         "campaign_id": campaign_id,
         "template_id": template_id,
         "template_name": template_name,
-        "recipients": [
-            {
-                "phone_number": phone,
-                "status": "pending",
-                "gupshup_message_id": None,
-            }
-            for phone in recipients
-        ],
+        "retry_policy": {"enabled": True, "delay_hours": 3},
+        "recipients": [_default_recipient(phone) for phone in recipients],
         "created_at": datetime.now(timezone.utc),
     })
     return campaign_id
@@ -618,6 +628,15 @@ def set_campaign_recipient_sent(
         {"campaign_id": campaign_id, "recipients.phone_number": phone_number},
         {"$set": set_fields},
     )
+    if not success:
+        from qlink_chatbot.utils.campaign_retry import schedule_recipient_retry
+
+        schedule_recipient_retry(
+            campaign_id,
+            phone_number,
+            error,
+            failure_status="failed",
+        )
 
 
 def update_campaign_recipient_status(
@@ -639,17 +658,41 @@ def update_campaign_recipient_status(
     )
 
 
+def _parse_recipient_dt(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
 def _campaign_stats(recipients: list) -> dict:
     total = len(recipients)
     delivered = sum(1 for r in recipients if r["status"] in ("delivered", "read"))
     read = sum(1 for r in recipients if r["status"] == "read")
     failed = sum(1 for r in recipients if r["status"] in ("failed", "undelivered"))
+    now = datetime.now(timezone.utc)
+    retry_pending = 0
+    for r in recipients:
+        if r.get("status") not in ("failed", "undelivered"):
+            continue
+        retry_at = _parse_recipient_dt(r.get("retry_at"))
+        if retry_at and retry_at > now:
+            retry_pending += 1
 
     return {
         "total": total,
         "delivered": delivered,
         "read": read,
         "failed": failed,
+        "retry_pending": retry_pending,
         "delivery_rate": round(delivered / total * 100, 1) if total else 0,
         "read_rate": round(read / total * 100, 1) if total else 0,
     }
@@ -702,7 +745,15 @@ def get_campaign_by_id(
     page = max(int(page or 1), 1)
     limit = min(max(int(limit or 50), 1), 100)
     skip = (page - 1) * limit
-    doc["recipients"] = filtered[skip : skip + limit]
+    serialized = []
+    for rec in filtered[skip : skip + limit]:
+        row = dict(rec)
+        for field in ("failed_at", "retry_at", "last_attempt_at"):
+            val = row.get(field)
+            if isinstance(val, datetime):
+                row[field] = val.isoformat()
+        serialized.append(row)
+    doc["recipients"] = serialized
     doc["recipients_total"] = len(filtered)
     doc["page"] = page
     doc["limit"] = limit

@@ -40,7 +40,7 @@ def update_campaign_recipient_status(
                 {"recipients.whatsapp_message_id": {"$in": ids}},
             ]
         },
-        {"recipients": 1},
+        {"recipients": 1, "campaign_id": 1},
     )
     if not doc:
         return False
@@ -71,4 +71,14 @@ def update_campaign_recipient_status(
         set_fields[f"recipients.{idx}.error"] = error_reason
 
     campaigns.update_one({"_id": doc["_id"]}, {"$set": set_fields})
+
+    if status in ("failed", "undelivered") and error_reason:
+        from qlink_chatbot.utils.campaign_retry import schedule_recipient_retry
+
+        schedule_recipient_retry(
+            doc["campaign_id"],
+            recipient.get("phone_number"),
+            error_reason,
+            failure_status=status,
+        )
     return True

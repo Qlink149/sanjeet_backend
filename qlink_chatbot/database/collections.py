@@ -34,6 +34,11 @@ def ensure_indexes():
         ),
         (campaigns, [("created_at", -1)], {"name": "campaigns_created_at"}),
         (
+            campaigns,
+            [("recipients.retry_at", 1)],
+            {"name": "campaigns_recipient_retry_at", "sparse": True},
+        ),
+        (
             masterclasses,
             [("masterclass_id", 1)],
             {"name": "masterclasses_id", "unique": True},
