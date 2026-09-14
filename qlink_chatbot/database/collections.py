@@ -49,6 +49,11 @@ def ensure_indexes():
             [("masterclass_registrations.masterclass_id", 1)],
             {"name": "leads_mc_registration_id"},
         ),
+        (
+            leads,
+            [("quiz_access_reminder_due_at", 1)],
+            {"name": "leads_quiz_reminder_due", "sparse": True},
+        ),
     ]
     for collection, keys, kwargs in specs:
         try:

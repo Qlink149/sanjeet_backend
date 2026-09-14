@@ -35,14 +35,12 @@ from qlink_chatbot.utils.campaign_status import (
     extract_v3_failure_reason,
 )
 from qlink_chatbot.utils.env_load import quiz_submit_template_id
+from qlink_chatbot.utils.quiz_access_reminder import send_quiz_access_template
 from qlink_chatbot.utils.format_chathistory import format_user
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.phone import (
     inbound_matches_masterclass_trigger,
     normalize_wa_phone,
-)
-from qlink_chatbot.whatsapp_functions.dashboard.send_template_by_id import (
-    send_template_message,
 )
 from qlink_chatbot.whatsapp_functions.send_text_message import send_text_message
 
@@ -52,41 +50,22 @@ QUICK_REPLY_RESPONSES = {
     ),
 }
 
-QUIZ_ACCESS_TEMPLATE_BODY = (
-    "Thank you for completing the Money Archetype Quiz. "
-    "Your Masterclass access has been unlocked. Tap Yes to receive the link."
-)
-
-
-def _send_quiz_submit_template(phone: str, username: str | None) -> None:
+def _send_quiz_submit_template(
+    phone: str,
+    username: str | None,
+    lead_id: str | None = None,
+) -> None:
     """Fire Utility `access_yes` after quiz capture; never raises to the request."""
-    template_id = (quiz_submit_template_id or "").strip()
-    if not phone or not template_id:
-        return
     try:
-        rsp = send_template_message(phone, template_id)
+        send_quiz_access_template(
+            phone,
+            username,
+            kind="initial",
+            lead_id=lead_id,
+        )
     except Exception as e:
         logger.exception(
             "Quiz submit template send failed",
-            extra={"phone_number": phone, "error": str(e)},
-        )
-        rsp = {"success": False, "message_id": None, "error": str(e)}
-    assistant = {
-        "role": "assistant",
-        "content": QUIZ_ACCESS_TEMPLATE_BODY,
-        "status": "submitted" if rsp.get("success") else "failed",
-        "template_id": template_id,
-        "template_name": "access_yes",
-    }
-    if rsp.get("message_id"):
-        assistant["gupshup_message_id"] = rsp["message_id"]
-    if rsp.get("error"):
-        assistant["error"] = rsp["error"]
-    try:
-        append_chat_entries(phone, [assistant], username)
-    except Exception as e:
-        logger.exception(
-            "Quiz submit template inbox append failed",
             extra={"phone_number": phone, "error": str(e)},
         )
 
@@ -489,7 +468,10 @@ async def quiz_submit(payload: QuizSubmit, background_tasks: BackgroundTasks):
         stored = (lead or {}).get("contact_number") or normalize_wa_phone(phone) or phone
         await asyncio.to_thread(ensure_user_thread, stored, name)
         if stored and quiz_submit_template_id:
-            background_tasks.add_task(_send_quiz_submit_template, stored, name)
+            lead_id = (lead or {}).get("lead_id")
+            background_tasks.add_task(
+                _send_quiz_submit_template, stored, name, lead_id
+            )
         return {
             "success": True,
             "data": {

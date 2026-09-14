@@ -107,6 +107,18 @@ def cron_run_campaign_retries(request: Request):
     return JSONResponse({"success": True, **summary})
 
 
+@dashboard_router.get("/cron/quiz-access-reminders")
+def cron_run_quiz_access_reminders(request: Request):
+    """Vercel Cron tick for 24h quiz access_yes reminders."""
+    denied = _verify_cron_secret(request)
+    if denied:
+        return denied
+    from qlink_chatbot.utils.quiz_access_reminder import run_due_quiz_access_reminders
+
+    summary = run_due_quiz_access_reminders()
+    return JSONResponse({"success": True, **summary})
+
+
 @dashboard_router.get("/ping")
 def ping():
     """General Ping."""

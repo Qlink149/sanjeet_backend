@@ -8,6 +8,10 @@
     {
       "path": "/dashboard/cron/campaign-retries",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/dashboard/cron/quiz-access-reminders",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
