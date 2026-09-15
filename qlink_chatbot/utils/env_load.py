@@ -41,3 +41,12 @@ quiz_submit_template_id = (
     os.environ.get("QUIZ_SUBMIT_TEMPLATE_ID")
     or "bb2a2c86-87f0-4201-a108-d55e38dc3da6"
 )
+
+# 24h broadcast masterclass reminder — approved masterclass_link_reminder Utility.
+broadcast_masterclass_reminder_template_id = os.environ.get(
+    "BROADCAST_MASTERCLASS_REMINDER_TEMPLATE_ID",
+    "5f8f530a-1668-4da7-8c49-a9e67c3462ae",
+)
+broadcast_masterclass_reminder_template_ids = os.environ.get(
+    "BROADCAST_MASTERCLASS_REMINDER_TEMPLATE_IDS", ""
+)

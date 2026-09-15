@@ -21,6 +21,7 @@ from qlink_chatbot.database.db_utils import (
 )
 from qlink_chatbot.database.leads import build_lead_query
 from qlink_chatbot.utils.phone import normalize_phone_list
+from qlink_chatbot.utils.template_buttons import resolve_masterclass_nudge_enabled
 from qlink_chatbot.utils.template_image import resolve_template_image_url
 from qlink_chatbot.whatsapp_functions.dashboard.get_all_templates import (
     get_all_templates,
@@ -64,7 +65,12 @@ def _run_one_schedule(sched: dict, run_date: str):
             (t["elementName"] for t in all_templates if t.get("id") == template_id),
             sched.get("template_name") or template_id,
         )
-        campaign_id = create_campaign(template_id, template_name, phones)
+        campaign_id = create_campaign(
+            template_id,
+            template_name,
+            phones,
+            masterclass_nudge_enabled=resolve_masterclass_nudge_enabled(template_id),
+        )
 
         image_url = resolve_template_image_url(template_id)
 

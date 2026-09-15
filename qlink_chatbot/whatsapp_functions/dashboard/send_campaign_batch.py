@@ -1,6 +1,9 @@
+from datetime import datetime, timezone
+
 from qlink_chatbot.database.collections import campaigns
 from qlink_chatbot.database.db_utils import (
     append_chat_entries,
+    schedule_campaign_mc_nudge,
     set_campaign_recipient_sent,
 )
 from qlink_chatbot.utils.logger_config import logger
@@ -59,8 +62,9 @@ def send_campaign_messages(
     phones = normalize_phone_list(phones)
     campaign = campaigns.find_one(
         {"campaign_id": campaign_id},
-        {"template_name": 1, "template_id": 1},
+        {"template_name": 1, "template_id": 1, "masterclass_nudge_enabled": 1},
     ) or {}
+    masterclass_nudge_enabled = bool(campaign.get("masterclass_nudge_enabled"))
     template_name = campaign.get("template_name") or template_id
     content = _template_chat_content(template_id, template_name)
 
@@ -74,6 +78,12 @@ def send_campaign_messages(
                 rsp["success"],
                 error=rsp.get("error"),
             )
+            if rsp.get("success") and masterclass_nudge_enabled:
+                schedule_campaign_mc_nudge(
+                    campaign_id,
+                    phone,
+                    datetime.now(timezone.utc),
+                )
             entry = {
                 "role": "assistant",
                 "content": content,

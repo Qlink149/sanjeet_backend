@@ -107,15 +107,17 @@ def cron_run_campaign_retries(request: Request):
     return JSONResponse({"success": True, **summary})
 
 
-@dashboard_router.get("/cron/quiz-access-reminders")
-def cron_run_quiz_access_reminders(request: Request):
-    """Vercel Cron tick for 24h quiz access_yes reminders."""
+@dashboard_router.get("/cron/masterclass-utility-reminders")
+def cron_run_masterclass_utility_reminders(request: Request):
+    """Vercel Cron tick for unified 24h quiz + broadcast masterclass Utility reminders."""
     denied = _verify_cron_secret(request)
     if denied:
         return denied
-    from qlink_chatbot.utils.quiz_access_reminder import run_due_quiz_access_reminders
+    from qlink_chatbot.utils.masterclass_utility_reminders import (
+        run_due_masterclass_utility_reminders,
+    )
 
-    summary = run_due_quiz_access_reminders()
+    summary = run_due_masterclass_utility_reminders()
     return JSONResponse({"success": True, **summary})
 
 
@@ -370,19 +372,21 @@ async def create_template_route(
 
             gupshup_buttons = []
             for b in button_list:
-                if not b.get("text"):
+                text = (b.get("text") or "").strip()
+                if not text:
                     continue
-                if b.get("type") == "QUICK_REPLY" or not b.get("url"):
+                url = (b.get("url") or "").strip()
+                if b.get("type") == "QUICK_REPLY" or not url:
                     gupshup_buttons.append(
-                        {"type": "QUICK_REPLY", "text": b["text"]}
+                        {"type": "QUICK_REPLY", "text": text}
                     )
                 else:
                     gupshup_buttons.append(
                         {
                             "type": "URL",
-                            "text": b["text"],
-                            "url": b["url"],
-                            "example": [b["url"]],
+                            "text": text,
+                            "url": url,
+                            "example": [url],
                         }
                     )
             if gupshup_buttons:
@@ -604,8 +608,17 @@ async def trigger_campaign_v2(
             template_id,
         )
 
+        from qlink_chatbot.utils.template_buttons import resolve_masterclass_nudge_enabled
+
+        masterclass_nudge_enabled = await asyncio.to_thread(
+            resolve_masterclass_nudge_enabled, template_id
+        )
         campaign_id = await asyncio.to_thread(
-            create_campaign, template_id, template_name, phones
+            create_campaign,
+            template_id,
+            template_name,
+            phones,
+            masterclass_nudge_enabled=masterclass_nudge_enabled,
         )
 
         # If this template was created with a header image, it was saved in

@@ -778,6 +778,11 @@ def register_for_masterclass(
         },
         upsert=True,
     )
+    from qlink_chatbot.utils.masterclass_registration import (
+        clear_pending_masterclass_nudges,
+    )
+
+    clear_pending_masterclass_nudges(stored)
     return get_lead_by_id(lead_id)
 
 

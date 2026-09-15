@@ -10,7 +10,7 @@
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/dashboard/cron/quiz-access-reminders",
+      "path": "/dashboard/cron/masterclass-utility-reminders",
       "schedule": "*/5 * * * *"
     }
   ]

@@ -1,25 +1,27 @@
-"""Unit tests for quiz 24h access_yes reminder."""
+"""Unit tests for quiz 24h access_yes reminder scheduling and send."""
 
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from qlink_chatbot.utils.quiz_access_reminder import (
+from qlink_chatbot.utils.masterclass_registration import (
     is_registered_for_active_masterclass,
+)
+from qlink_chatbot.utils.quiz_access_reminder import (
     schedule_quiz_access_reminder,
     send_quiz_access_template,
 )
 
 
 class IsRegisteredForActiveMasterclassTest(unittest.TestCase):
-    @patch("qlink_chatbot.utils.quiz_access_reminder.get_active_masterclass")
+    @patch("qlink_chatbot.utils.masterclass_registration.get_active_masterclass")
     def test_no_active_masterclass(self, mock_active):
         mock_active.return_value = None
         self.assertFalse(
             is_registered_for_active_masterclass({"masterclass_registrations": []})
         )
 
-    @patch("qlink_chatbot.utils.quiz_access_reminder.get_active_masterclass")
+    @patch("qlink_chatbot.utils.masterclass_registration.get_active_masterclass")
     def test_registered_for_active(self, mock_active):
         mock_active.return_value = {"masterclass_id": "mc-1"}
         lead = {
@@ -30,7 +32,7 @@ class IsRegisteredForActiveMasterclassTest(unittest.TestCase):
         }
         self.assertTrue(is_registered_for_active_masterclass(lead))
 
-    @patch("qlink_chatbot.utils.quiz_access_reminder.get_active_masterclass")
+    @patch("qlink_chatbot.utils.masterclass_registration.get_active_masterclass")
     def test_only_old_registration(self, mock_active):
         mock_active.return_value = {"masterclass_id": "mc-new"}
         lead = {"masterclass_registrations": [{"masterclass_id": "mc-old"}]}

@@ -586,21 +586,83 @@ def _default_recipient(phone: str) -> dict:
         "last_attempt_at": None,
         "retry_in_progress": False,
         "attempts": [],
+        "mc_nudge_due_at": None,
+        "mc_nudge_sent_at": None,
+        "mc_nudge_in_progress": False,
     }
 
 
-def create_campaign(template_id: str, template_name: str, recipients: list) -> str:
+def create_campaign(
+    template_id: str,
+    template_name: str,
+    recipients: list,
+    *,
+    masterclass_nudge_enabled: bool = False,
+) -> str:
     """Creates a campaign record with one pending entry per recipient phone number."""
     campaign_id = str(uuid4())
     campaigns.insert_one({
         "campaign_id": campaign_id,
         "template_id": template_id,
         "template_name": template_name,
+        "masterclass_nudge_enabled": masterclass_nudge_enabled,
         "retry_policy": {"enabled": True, "delay_hours": 3},
         "recipients": [_default_recipient(phone) for phone in recipients],
         "created_at": datetime.now(timezone.utc),
     })
     return campaign_id
+
+
+def _clear_stale_broadcast_mc_nudges(phone_number: str, except_campaign_id: str) -> None:
+    """Drop pending 24h nudges from older campaigns so only the latest broadcast schedules."""
+    campaigns.update_many(
+        {
+            "campaign_id": {"$ne": except_campaign_id},
+            "recipients": {
+                "$elemMatch": {
+                    "phone_number": phone_number,
+                    "mc_nudge_due_at": {"$exists": True, "$ne": None},
+                    "$or": [
+                        {"mc_nudge_sent_at": {"$exists": False}},
+                        {"mc_nudge_sent_at": None},
+                    ],
+                }
+            },
+        },
+        {
+            "$unset": {"recipients.$[r].mc_nudge_due_at": ""},
+            "$set": {"recipients.$[r].mc_nudge_in_progress": False},
+        },
+        array_filters=[
+            {
+                "r.phone_number": phone_number,
+                "$or": [
+                    {"r.mc_nudge_sent_at": {"$exists": False}},
+                    {"r.mc_nudge_sent_at": None},
+                ],
+            }
+        ],
+    )
+
+
+def schedule_campaign_mc_nudge(
+    campaign_id: str,
+    phone_number: str,
+    sent_at: datetime,
+) -> None:
+    """Schedule a one-time 24h broadcast masterclass reminder for a recipient."""
+    _clear_stale_broadcast_mc_nudges(phone_number, campaign_id)
+    due_at = sent_at + timedelta(hours=24)
+    campaigns.update_one(
+        {"campaign_id": campaign_id, "recipients.phone_number": phone_number},
+        {
+            "$set": {
+                "recipients.$.mc_nudge_due_at": due_at,
+                "recipients.$.mc_nudge_sent_at": None,
+                "recipients.$.mc_nudge_in_progress": False,
+            }
+        },
+    )
 
 
 def set_campaign_recipient_sent(

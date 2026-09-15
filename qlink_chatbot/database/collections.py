@@ -54,6 +54,16 @@ def ensure_indexes():
             [("quiz_access_reminder_due_at", 1)],
             {"name": "leads_quiz_reminder_due", "sparse": True},
         ),
+        (
+            campaigns,
+            [("recipients.mc_nudge_due_at", 1)],
+            {"name": "campaigns_recipient_mc_nudge_due", "sparse": True},
+        ),
+        (
+            leads,
+            [("masterclass_nudge_in_progress", 1)],
+            {"name": "leads_masterclass_nudge_lock", "sparse": True},
+        ),
     ]
     for collection, keys, kwargs in specs:
         try:
