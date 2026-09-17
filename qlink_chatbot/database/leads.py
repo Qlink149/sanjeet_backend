@@ -92,6 +92,20 @@ def is_whatsapp_ready(phone_class: str | None) -> bool:
     return phone_class in WA_READY_CLASSES
 
 
+QUIZ_SOURCE = "Money Ceiling Quiz"
+QUIZ_PRODUCT_TAG = "Quiz"
+
+
+def _quiz_filled_match() -> dict:
+    """Leads who submitted the Money Ceiling Quiz (source or archetype on file)."""
+    return {
+        "$or": [
+            {"source": QUIZ_SOURCE},
+            {"quiz_archetype": {"$exists": True, "$nin": [None, ""]}},
+        ]
+    }
+
+
 def build_lead_query(
     category: str | None = None,
     sub_category: str | None = None,
@@ -309,6 +323,10 @@ def get_lead_stats():
                         }
                     }
                 ],
+                "quiz_filled": [
+                    {"$match": _quiz_filled_match()},
+                    {"$count": "n"},
+                ],
             }
         }
     ]
@@ -324,6 +342,7 @@ def get_lead_stats():
         "nurture": pipelines.get("nurture", 0),
         "no_number": _facet_count(facet.get("no_number") or []),
         "not_whatsapp_ready": _facet_count(facet.get("not_whatsapp_ready") or []),
+        "quiz_filled": _facet_count(facet.get("quiz_filled") or []),
         "pipelines": pipelines,
         "products": dict(sorted(products.items(), key=lambda kv: -kv[1])),
         "sources": dict(sorted(sources.items(), key=lambda kv: -kv[1])),
@@ -609,7 +628,7 @@ def upsert_quiz_lead(
         "contact_number": stored or None,
         "phone_class": cls,
         "whatsapp_ready": ready,
-        "source": "Money Ceiling Quiz",
+        "source": QUIZ_SOURCE,
         "quiz_archetype": archetype,
         "quiz_answers": answers or {},
         "updated_at": now,
@@ -623,9 +642,10 @@ def upsert_quiz_lead(
         update: dict = {
             "$set": payload,
             "$push": {"engagement": quiz_event},
+            "$addToSet": {"products": QUIZ_PRODUCT_TAG},
         }
         if stored:
-            update["$addToSet"] = {"contact_numbers": stored}
+            update["$addToSet"]["contact_numbers"] = stored
         leads.update_one({"lead_id": existing["lead_id"]}, update)
         return get_lead_by_id(existing["lead_id"])
     lead = {
@@ -633,7 +653,7 @@ def upsert_quiz_lead(
         "lead_id": str(uuid4()),
         "contact_numbers": [stored] if stored else [],
         "aka": [],
-        "products": [],
+        "products": [QUIZ_PRODUCT_TAG],
         "pipeline": "nurture",
         "engagement": [quiz_event],
         "created_at": now,
