@@ -158,10 +158,9 @@ def _engagement_event(
 def _serialize_lead(doc: dict) -> dict:
     doc = dict(doc)
     doc.pop("_id", None)
-    for field in ("created_at", "updated_at", "masterclass_registered_at"):
-        value = doc.get(field)
+    for key, value in list(doc.items()):
         if isinstance(value, datetime):
-            doc[field] = value.isoformat()
+            doc[key] = value.isoformat()
     regs = doc.get("masterclass_registrations")
     if isinstance(regs, list):
         cleaned = []
