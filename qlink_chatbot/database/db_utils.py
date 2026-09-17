@@ -720,6 +720,15 @@ def update_campaign_recipient_status(
     )
 
 
+def _serialize_campaign_recipient(rec: dict) -> dict:
+    """JSON-safe campaign recipient row (mc_nudge_*, retry_*, etc.)."""
+    row = dict(rec)
+    for key, val in list(row.items()):
+        if isinstance(val, datetime):
+            row[key] = val.isoformat()
+    return row
+
+
 def _parse_recipient_dt(value) -> datetime | None:
     if value is None:
         return None
@@ -807,14 +816,10 @@ def get_campaign_by_id(
     page = max(int(page or 1), 1)
     limit = min(max(int(limit or 50), 1), 100)
     skip = (page - 1) * limit
-    serialized = []
-    for rec in filtered[skip : skip + limit]:
-        row = dict(rec)
-        for field in ("failed_at", "retry_at", "last_attempt_at"):
-            val = row.get(field)
-            if isinstance(val, datetime):
-                row[field] = val.isoformat()
-        serialized.append(row)
+    serialized = [
+        _serialize_campaign_recipient(rec)
+        for rec in filtered[skip : skip + limit]
+    ]
     doc["recipients"] = serialized
     doc["recipients_total"] = len(filtered)
     doc["page"] = page
