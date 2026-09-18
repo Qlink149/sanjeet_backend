@@ -57,6 +57,10 @@ from qlink_chatbot.whatsapp_functions.dashboard.send_campaign_batch import (
     send_campaign_messages,
 )
 
+# Audiences at or below this size are sent in-request so Vercel serverless
+# does not drop BackgroundTasks before messages leave the queue.
+SYNC_CAMPAIGN_SEND_THRESHOLD = 50
+
 
 class LoginData(BaseModel):
     username: str
@@ -585,6 +589,16 @@ async def trigger_campaign_v2(
                 for r in records
             ]
         )
+        audience_source = "category" if category else "file" if file else "manual"
+
+        if not phones:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "message": "No WhatsApp-ready recipients matched your filters.",
+                },
+            )
 
         # Preview mode — resolves and counts the audience exactly like a
         # real send would, but never creates a campaign or queues any
@@ -636,22 +650,46 @@ async def trigger_campaign_v2(
                 extra={"template_id": template_id, "image_url": image_url},
             )
 
-        # Send in the background instead of blocking this request — for a
-        # large audience (e.g. "all leads"), sending one-by-one in-request
-        # can take long enough to hit browser/proxy timeouts. The caller
-        # polls GET /dashboard/campaigns/{campaign_id} for live progress.
-        background_tasks.add_task(
-            send_campaign_messages, campaign_id, phones, template_id, image_url
+        logger.info(
+            "Campaign triggered",
+            extra={
+                "campaign_id": campaign_id,
+                "template_id": template_id,
+                "template_name": template_name,
+                "total": len(phones),
+                "audience_source": audience_source,
+            },
         )
+
+        sync_send = len(phones) <= SYNC_CAMPAIGN_SEND_THRESHOLD
+        if sync_send:
+            await asyncio.to_thread(
+                send_campaign_messages, campaign_id, phones, template_id, image_url
+            )
+            status = "sent"
+            message = (
+                f"Campaign sent to {len(phones)} recipient(s). "
+                "Open Campaign Analytics for delivery progress."
+            )
+        else:
+            # Large audiences: queue in background to avoid request timeouts.
+            background_tasks.add_task(
+                send_campaign_messages, campaign_id, phones, template_id, image_url
+            )
+            status = "queued"
+            message = (
+                f"Campaign queued for {len(phones)} recipient(s). "
+                "Check Campaign Analytics for live progress."
+            )
 
         return JSONResponse(
             status_code=200,
             content={
                 "success": True,
                 "campaign_id": campaign_id,
-                "total": len(records),
-                "status": "queued",
-                "message": "Campaign queued — check GET /dashboard/campaigns/{campaign_id} for live progress.",
+                "total": len(phones),
+                "status": status,
+                "message": message,
             },
         )
 
