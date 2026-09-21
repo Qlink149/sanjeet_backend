@@ -106,6 +106,19 @@ def _quiz_filled_match() -> dict:
     }
 
 
+def _quiz_no_active_mc_match(active_mc_id: str | None) -> dict:
+    """Quiz submitters who have not registered for the Active masterclass."""
+    base = _quiz_filled_match()
+    if not active_mc_id:
+        return base
+    return {
+        "$and": [
+            base,
+            {"masterclass_registrations.masterclass_id": {"$ne": active_mc_id}},
+        ]
+    }
+
+
 def build_lead_query(
     category: str | None = None,
     sub_category: str | None = None,
@@ -116,6 +129,7 @@ def build_lead_query(
     whatsapp_ready_only: bool = False,
     no_number_only: bool = False,
     not_whatsapp_ready_only: bool = False,
+    quiz_no_active_masterclass: bool = False,
     expiry_offset_days: int | None = None,
     expiry_date: str | None = None,
 ) -> dict:
@@ -148,6 +162,16 @@ def build_lead_query(
     elif whatsapp_ready_only:
         query["whatsapp_ready"] = True
         query["contact_number"] = {"$nin": [None, ""]}
+    if quiz_no_active_masterclass:
+        from qlink_chatbot.database.masterclasses import get_active_masterclass
+
+        active = get_active_masterclass()
+        active_id = (active or {}).get("masterclass_id")
+        quiz_match = _quiz_no_active_mc_match(active_id)
+        if query:
+            query = {"$and": [query, quiz_match]}
+        else:
+            query = quiz_match
     return query
 
 
@@ -258,6 +282,12 @@ def _facet_count(bucket: list) -> int:
 
 
 def get_lead_stats():
+    from qlink_chatbot.database.masterclasses import get_active_masterclass
+
+    active = get_active_masterclass()
+    active_id = (active or {}).get("masterclass_id")
+    quiz_no_mc_match = _quiz_no_active_mc_match(active_id)
+
     pipeline = [
         {
             "$facet": {
@@ -327,6 +357,10 @@ def get_lead_stats():
                     {"$match": _quiz_filled_match()},
                     {"$count": "n"},
                 ],
+                "quiz_no_masterclass": [
+                    {"$match": quiz_no_mc_match},
+                    {"$count": "n"},
+                ],
             }
         }
     ]
@@ -343,6 +377,7 @@ def get_lead_stats():
         "no_number": _facet_count(facet.get("no_number") or []),
         "not_whatsapp_ready": _facet_count(facet.get("not_whatsapp_ready") or []),
         "quiz_filled": _facet_count(facet.get("quiz_filled") or []),
+        "quiz_no_masterclass": _facet_count(facet.get("quiz_no_masterclass") or []),
         "pipelines": pipelines,
         "products": dict(sorted(products.items(), key=lambda kv: -kv[1])),
         "sources": dict(sorted(sources.items(), key=lambda kv: -kv[1])),

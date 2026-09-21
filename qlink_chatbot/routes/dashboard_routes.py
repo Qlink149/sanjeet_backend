@@ -984,6 +984,7 @@ async def fetch_filtered_leads(
     whatsapp_ready: bool = True,
     no_number: bool = False,
     not_whatsapp_ready: bool = False,
+    quiz_no_masterclass: bool = False,
     search: str = "",
     page: int = 1,
     limit: int = 25,
@@ -1005,6 +1006,7 @@ async def fetch_filtered_leads(
             whatsapp_ready_only=whatsapp_ready and not no_number and not not_whatsapp_ready,
             no_number_only=no_number,
             not_whatsapp_ready_only=not_whatsapp_ready and not no_number,
+            quiz_no_active_masterclass=quiz_no_masterclass,
         )
         data = await asyncio.to_thread(
             get_filtered_leads, query, search, page, limit
