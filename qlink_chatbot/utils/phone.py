@@ -91,6 +91,18 @@ def pick_sendable_phone(*parts) -> tuple[str, str, bool]:
     return "", "missing", False
 
 
+def phone_lookup_variants(phone: str | None) -> list[str]:
+    """All stored forms worth matching (91-prefixed, 10-digit India, raw input)."""
+    raw = str(phone or "").strip()
+    stored = normalize_wa_phone(phone) or digits_only(phone) or raw
+    variants = {stored, raw, digits_only(phone)}
+    if stored.startswith("91") and len(stored) > 10:
+        variants.add(stored[2:])
+    if len(stored) == 10 and stored[0] in "6789":
+        variants.add("91" + stored)
+    return [v for v in variants if v]
+
+
 def normalize_phone_list(phones: list | None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()

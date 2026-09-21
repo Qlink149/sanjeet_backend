@@ -8,6 +8,7 @@ from qlink_chatbot.database.collections import idac, leads
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.phone import (
     normalize_wa_phone,
+    phone_lookup_variants,
     pick_sendable_phone,
 )
 
@@ -94,6 +95,21 @@ def is_whatsapp_ready(phone_class: str | None) -> bool:
 
 QUIZ_SOURCE = "Money Ceiling Quiz"
 QUIZ_PRODUCT_TAG = "Quiz"
+
+
+def find_lead_by_phone(phone: str | None) -> dict | None:
+    """Find a lead by any common phone format (10-digit, 91-prefixed, raw)."""
+    variants = phone_lookup_variants(phone)
+    if not variants:
+        return None
+    return leads.find_one(
+        {
+            "$or": [
+                {"contact_number": {"$in": variants}},
+                {"contact_numbers": {"$in": variants}},
+            ]
+        }
+    )
 
 
 def _quiz_filled_match() -> dict:
@@ -645,18 +661,9 @@ def upsert_quiz_lead(
 ) -> dict:
     sendable, cls, ready = pick_sendable_phone(phone)
     stored = sendable or normalize_wa_phone(phone)
+    variants = phone_lookup_variants(phone)
     now = datetime.now(timezone.utc)
-    existing = None
-    if stored:
-        existing = leads.find_one(
-            {
-                "$or": [
-                    {"contact_number": stored},
-                    {"contact_numbers": stored},
-                    {"contact_number": phone},
-                ]
-            }
-        )
+    existing = find_lead_by_phone(phone)
     payload = {
         "name": name,
         "email": email or None,
@@ -668,25 +675,30 @@ def upsert_quiz_lead(
         "quiz_answers": answers or {},
         "updated_at": now,
     }
-    quiz_event = _engagement_event(
-        "quiz_submitted",
-        now,
-        label=f"Quiz submitted{f' · {archetype}' if archetype else ''}",
-    )
     if existing:
+        quiz_event = _engagement_event(
+            "quiz_reengaged",
+            now,
+            label=f"Quiz re-submitted{f' · {archetype}' if archetype else ''}",
+        )
         update: dict = {
             "$set": payload,
             "$push": {"engagement": quiz_event},
             "$addToSet": {"products": QUIZ_PRODUCT_TAG},
         }
-        if stored:
-            update["$addToSet"]["contact_numbers"] = stored
+        if variants:
+            update["$addToSet"]["contact_numbers"] = {"$each": variants}
         leads.update_one({"lead_id": existing["lead_id"]}, update)
         return get_lead_by_id(existing["lead_id"])
+    quiz_event = _engagement_event(
+        "quiz_submitted",
+        now,
+        label=f"Quiz submitted{f' · {archetype}' if archetype else ''}",
+    )
     lead = {
         **payload,
         "lead_id": str(uuid4()),
-        "contact_numbers": [stored] if stored else [],
+        "contact_numbers": variants or ([stored] if stored else []),
         "aka": [],
         "products": [QUIZ_PRODUCT_TAG],
         "pipeline": "nurture",
@@ -704,6 +716,7 @@ def register_for_masterclass(
 ) -> dict | None:
     """Create or update a People row for the Active masterclass registration."""
     stored = normalize_wa_phone(phone) or phone
+    variants = phone_lookup_variants(phone)
     if not stored or not masterclass:
         return None
     mc_id = masterclass.get("masterclass_id")
@@ -721,14 +734,7 @@ def register_for_masterclass(
         "meeting_link": link,
     }
 
-    existing = leads.find_one(
-        {
-            "$or": [
-                {"contact_number": stored},
-                {"contact_numbers": stored},
-            ]
-        }
-    )
+    existing = find_lead_by_phone(phone)
     already = False
     if existing:
         for row in existing.get("masterclass_registrations") or []:

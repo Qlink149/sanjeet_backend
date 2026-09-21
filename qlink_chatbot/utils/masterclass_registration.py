@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from qlink_chatbot.database.collections import campaigns, leads
+from qlink_chatbot.database.leads import find_lead_by_phone as _find_lead_by_phone
 from qlink_chatbot.database.masterclasses import get_active_masterclass
-from qlink_chatbot.utils.phone import normalize_wa_phone
+from qlink_chatbot.utils.phone import normalize_wa_phone, phone_lookup_variants
 
 
 def is_registered_for_active_masterclass(lead: dict | None) -> bool:
@@ -26,30 +27,21 @@ def is_registered_for_active_masterclass(lead: dict | None) -> bool:
 
 
 def find_lead_by_phone(phone: str) -> dict | None:
-    stored = normalize_wa_phone(phone) or phone
-    if not stored:
-        return None
-    return leads.find_one(
-        {
-            "$or": [
-                {"contact_number": stored},
-                {"contact_numbers": stored},
-            ]
-        }
-    )
+    return _find_lead_by_phone(phone)
 
 
 def clear_pending_masterclass_nudges(phone: str) -> None:
     """Clear quiz and broadcast 24h reminder timers for a phone."""
+    variants = phone_lookup_variants(phone)
     stored = normalize_wa_phone(phone) or phone
-    if not stored:
+    if not variants:
         return
     now = datetime.now(timezone.utc)
     leads.update_many(
         {
             "$or": [
-                {"contact_number": stored},
-                {"contact_numbers": stored},
+                {"contact_number": {"$in": variants}},
+                {"contact_numbers": {"$in": variants}},
             ],
             "quiz_access_reminder_due_at": {"$exists": True, "$ne": None},
         },
