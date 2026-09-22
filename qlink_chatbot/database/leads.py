@@ -29,6 +29,10 @@ PIPELINE_VALUES = {
     "discontinued",
 }
 
+# Pseudo-categories: accepted wherever a pipeline/category is, but they select
+# quiz segments instead of a pipeline value (like "all_leads" selects everyone).
+QUIZ_CATEGORIES = {"quiz_filled", "quiz_no_masterclass"}
+
 
 def map_pipeline(status: str | None) -> str:
     if not status:
@@ -157,7 +161,8 @@ def build_lead_query(
     """
     query: dict = {}
     pipe = pipeline or category
-    if pipe and pipe not in ("all_leads", "all", ""):
+    quiz_cat = pipe if pipe in QUIZ_CATEGORIES else None
+    if pipe and not quiz_cat and pipe not in ("all_leads", "all", ""):
         query["pipeline"] = pipe
     prod = product or sub_category
     if prod:
@@ -178,12 +183,16 @@ def build_lead_query(
     elif whatsapp_ready_only:
         query["whatsapp_ready"] = True
         query["contact_number"] = {"$nin": [None, ""]}
-    if quiz_no_active_masterclass:
+    quiz_match = None
+    if quiz_cat == "quiz_filled":
+        quiz_match = _quiz_filled_match()
+    elif quiz_cat == "quiz_no_masterclass" or quiz_no_active_masterclass:
         from qlink_chatbot.database.masterclasses import get_active_masterclass
 
         active = get_active_masterclass()
         active_id = (active or {}).get("masterclass_id")
         quiz_match = _quiz_no_active_mc_match(active_id)
+    if quiz_match:
         if query:
             query = {"$and": [query, quiz_match]}
         else:
@@ -494,7 +503,7 @@ def _person_from_rows(rows: list[dict], now: datetime) -> dict:
     }
 
 
-def import_coachee_json(payload: dict, replace: bool = True) -> dict:
+def import_coachee_json(payload: dict, replace: bool = False) -> dict:
     """Collapse 657 Excel rows into one person per phone (+ no-number docs)."""
     now = datetime.now(timezone.utc)
     rows = payload.get("leads") or []
