@@ -135,3 +135,9 @@ logs/
 .ruff_cache/
 data/
 *.xlsx
+
+# Contact data and import artefacts - never commit real contact records
+*.csv
+*.xls
+leads_backup*.json
+*_undo.json
