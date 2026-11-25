@@ -4,7 +4,7 @@ import hmac
 import json
 import os
 import re
-from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
@@ -38,6 +38,7 @@ from qlink_chatbot.database.masterclasses import (
     set_active,
     update_masterclass,
 )
+from qlink_chatbot.utils.auth_dependency import require_dashboard_token
 from qlink_chatbot.utils.auth_token import TokenError, issue_token
 from qlink_chatbot.utils.env_load import password as pwd
 from qlink_chatbot.utils.env_load import public_base_url
@@ -71,7 +72,11 @@ class LoginData(BaseModel):
 
 
 
-dashboard_router = APIRouter()
+# Everything on dashboard_router requires the login token. Only the explicit
+# allow-list below lives on public_dashboard_router (see
+# tests/test_route_auth.py, which pins the exact public set).
+dashboard_router = APIRouter(dependencies=[Depends(require_dashboard_token)])
+public_dashboard_router = APIRouter()
 
 def _verify_cron_secret(request: Request) -> JSONResponse | None:
     secret = os.environ.get("CRON_SECRET")
@@ -85,7 +90,7 @@ def _verify_cron_secret(request: Request) -> JSONResponse | None:
     return None
 
 
-@dashboard_router.get("/cron/schedules")
+@public_dashboard_router.get("/cron/schedules")
 def cron_run_schedules(request: Request):
     """Vercel Cron tick for delayed/expiry campaign sends.
 
@@ -102,7 +107,7 @@ def cron_run_schedules(request: Request):
     return JSONResponse({"success": True})
 
 
-@dashboard_router.get("/cron/campaign-retries")
+@public_dashboard_router.get("/cron/campaign-retries")
 def cron_run_campaign_retries(request: Request):
     """Vercel Cron tick for auto-retrying retriable campaign failures."""
     denied = _verify_cron_secret(request)
@@ -114,7 +119,7 @@ def cron_run_campaign_retries(request: Request):
     return JSONResponse({"success": True, **summary})
 
 
-@dashboard_router.get("/cron/masterclass-utility-reminders")
+@public_dashboard_router.get("/cron/masterclass-utility-reminders")
 def cron_run_masterclass_utility_reminders(request: Request):
     """Vercel Cron tick for unified 24h quiz + broadcast masterclass Utility reminders."""
     denied = _verify_cron_secret(request)
@@ -128,7 +133,7 @@ def cron_run_masterclass_utility_reminders(request: Request):
     return JSONResponse({"success": True, **summary})
 
 
-@dashboard_router.get("/ping")
+@public_dashboard_router.get("/ping")
 def ping():
     """General Ping."""
     try:
@@ -140,7 +145,7 @@ def ping():
             "success": False, "message": str(e)
         }, status_code=501)
     
-@dashboard_router.post("/login")
+@public_dashboard_router.post("/login")
 def login(data: LoginData):
     """Dashboard Login."""  
     username = data.username
@@ -460,7 +465,7 @@ async def create_template_route(
         )
 
 
-@dashboard_router.get("/template-image/{template_id}")
+@public_dashboard_router.get("/template-image/{template_id}")
 async def fetch_template_image(template_id: str):
     """Serves a template's header image from MongoDB.
 
@@ -1215,4 +1220,3 @@ async def delete_masterclass_route(masterclass_id: str):
             content={"success": False, "message": "Error deleting masterclass"},
             status_code=500,
         )
-

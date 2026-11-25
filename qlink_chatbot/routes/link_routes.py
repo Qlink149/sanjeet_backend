@@ -11,7 +11,6 @@ import os
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from starlette.requests import Request
 
 from qlink_chatbot.database.short_links import (
     delete_short_link,
@@ -21,33 +20,11 @@ from qlink_chatbot.database.short_links import (
     upsert_short_link,
     validate_target,
 )
-from qlink_chatbot.utils.auth_token import TokenError, verify_token
+from qlink_chatbot.utils.auth_dependency import (  # noqa: F401
+    register_auth_handler,
+    require_dashboard_token,
+)
 from qlink_chatbot.utils.logger_config import logger
-
-
-class Unauthorized(Exception):
-    pass
-
-
-def register_auth_handler(app) -> None:
-    """Render Unauthorized as the dashboard's {success, message} 401 JSON."""
-
-    @app.exception_handler(Unauthorized)
-    async def _handle(_request, _exc):
-        return JSONResponse(
-            {"success": False, "message": "Unauthorized"}, status_code=401
-        )
-
-
-async def require_dashboard_token(request: Request) -> dict:
-    header = request.headers.get("authorization") or ""
-    scheme, _, token = header.partition(" ")
-    if scheme.lower() != "bearer":
-        raise Unauthorized()
-    try:
-        return verify_token(token.strip())
-    except TokenError:
-        raise Unauthorized()
 
 
 link_router = APIRouter(dependencies=[Depends(require_dashboard_token)])

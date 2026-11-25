@@ -73,7 +73,7 @@ class TokenTest(unittest.TestCase):
 class LoginTest(unittest.TestCase):
     def setUp(self):
         app = FastAPI()
-        app.include_router(dashboard_routes.dashboard_router, prefix="/dashboard")
+        app.include_router(dashboard_routes.public_dashboard_router, prefix="/dashboard")
         self.client = TestClient(app)
 
     def _login(self, u, p):

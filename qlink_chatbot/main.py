@@ -245,8 +245,9 @@ app = FastAPI(
     openapi_url=None
 )
 
-from qlink_chatbot.routes.dashboard_routes import dashboard_router
-from qlink_chatbot.routes.link_routes import link_router, register_auth_handler
+from qlink_chatbot.routes.dashboard_routes import dashboard_router, public_dashboard_router
+from qlink_chatbot.routes.link_routes import link_router
+from qlink_chatbot.utils.auth_dependency import register_auth_handler
 from qlink_chatbot.routes.short_link_routes import short_link_router
 
 app.add_middleware(
@@ -260,8 +261,9 @@ app.add_middleware(
 api_router = APIRouter(prefix="/api/v1")
 
 app.include_router(router=dashboard_router, prefix="/dashboard")
+app.include_router(router=public_dashboard_router, prefix="/dashboard")  # token-free allow-list
 app.include_router(router=link_router, prefix="/dashboard")  # /dashboard/links CRUD
-register_auth_handler(app)  # 401 JSON for token-protected links routes
+register_auth_handler(app)  # 401 JSON for token-protected dashboard routes
 app.include_router(router=short_link_router)  # public /go/<slug> redirects
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 if os.path.isdir(STATIC_DIR):
