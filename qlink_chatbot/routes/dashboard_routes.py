@@ -508,6 +508,7 @@ async def trigger_campaign_v2(
     category: str | None = Form(None),
     sub_category: str | None = Form(None),
     source: str | None = Form(None),
+    segment: str | None = Form(None),
     exclude_phone_numbers: str | None = Form(None),
     dry_run: bool = Form(False),
     skip_already_sent: bool = Form(True),
@@ -521,6 +522,7 @@ async def trigger_campaign_v2(
                 category=category,
                 sub_category=sub_category,
                 source=source,
+                segment=segment,
                 whatsapp_ready_only=True,
             )
             if exclude_phone_numbers:
@@ -1021,6 +1023,7 @@ async def fetch_filtered_leads(
     category: str | None = None,
     sub_category: str | None = None,
     source: str | None = None,
+    segment: str | None = None,
     pipeline: str | None = None,
     product: str | None = None,
     masterclass_id: str | None = None,
@@ -1045,6 +1048,7 @@ async def fetch_filtered_leads(
             pipeline=pipeline,
             product=product,
             source=source,
+            segment=segment,
             masterclass_id=masterclass_id,
             whatsapp_ready_only=whatsapp_ready and not no_number and not not_whatsapp_ready,
             no_number_only=no_number,

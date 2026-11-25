@@ -156,6 +156,7 @@ def build_lead_query(
     quiz_no_active_masterclass: bool = False,
     expiry_offset_days: int | None = None,
     expiry_date: str | None = None,
+    segment: str | None = None,
 ) -> dict:
     """Shared filter for Leads UI, campaign preview, and scheduled sends.
 
@@ -173,6 +174,10 @@ def build_lead_query(
         query["products"] = prod
     if source:
         query["source"] = source_condition(source)
+    if segment:
+        # ``segments`` is a list of tag strings; equality on an array matches
+        # any element, so this ANDs with every other filter.
+        query["segments"] = segment
     if masterclass_id:
         query["masterclass_registrations.masterclass_id"] = masterclass_id
     if no_number_only:
@@ -385,6 +390,10 @@ def get_lead_stats():
                         }
                     }
                 ],
+                "segments": [
+                    {"$unwind": {"path": "$segments", "preserveNullAndEmptyArrays": False}},
+                    {"$group": {"_id": "$segments", "n": {"$sum": 1}}},
+                ],
                 "quiz_filled": [
                     {"$match": _quiz_filled_match()},
                     {"$count": "n"},
@@ -400,6 +409,7 @@ def get_lead_stats():
     facet = rows[0] if rows else {}
     pipelines = {d["_id"] or "unknown": d["n"] for d in facet.get("pipelines") or []}
     products = {d["_id"]: d["n"] for d in facet.get("products") or [] if d.get("_id")}
+    segments = {d["_id"]: d["n"] for d in facet.get("segments") or [] if d.get("_id")}
     sources = {d["_id"] or "(blank)": d["n"] for d in facet.get("sources") or []}
     return {
         "total": _facet_count(facet.get("total") or []),
@@ -413,6 +423,7 @@ def get_lead_stats():
         "pipelines": pipelines,
         "products": dict(sorted(products.items(), key=lambda kv: -kv[1])),
         "sources": add_merged_source_counts(sources, leads),
+        "segments": dict(sorted(segments.items(), key=lambda kv: -kv[1])),
     }
 
 
