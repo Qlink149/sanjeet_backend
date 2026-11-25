@@ -1,15 +1,17 @@
 """Dashboard CRUD for /go/<slug> short links (see database/short_links.py).
 
-Auth: matches the other /dashboard endpoints, which have no server-side auth
-(the dashboard login only gates the UI). Do not treat these as private.
+Auth: every route here requires ``Authorization: Bearer <token>`` (token from
+POST /dashboard/login, see utils/auth_token.py). Other /dashboard endpoints
+are NOT token-protected yet.
 """
 
 import asyncio
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.requests import Request
 
 from qlink_chatbot.database.short_links import (
     delete_short_link,
@@ -19,9 +21,36 @@ from qlink_chatbot.database.short_links import (
     upsert_short_link,
     validate_target,
 )
+from qlink_chatbot.utils.auth_token import TokenError, verify_token
 from qlink_chatbot.utils.logger_config import logger
 
-link_router = APIRouter()
+
+class Unauthorized(Exception):
+    pass
+
+
+def register_auth_handler(app) -> None:
+    """Render Unauthorized as the dashboard's {success, message} 401 JSON."""
+
+    @app.exception_handler(Unauthorized)
+    async def _handle(_request, _exc):
+        return JSONResponse(
+            {"success": False, "message": "Unauthorized"}, status_code=401
+        )
+
+
+async def require_dashboard_token(request: Request) -> dict:
+    header = request.headers.get("authorization") or ""
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer":
+        raise Unauthorized()
+    try:
+        return verify_token(token.strip())
+    except TokenError:
+        raise Unauthorized()
+
+
+link_router = APIRouter(dependencies=[Depends(require_dashboard_token)])
 
 DEFAULT_PUBLIC_URL = "https://sanjeet.ray.claraai.tech"
 

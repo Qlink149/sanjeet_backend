@@ -6,7 +6,8 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from qlink_chatbot.routes.link_routes import link_router
+from qlink_chatbot.routes.link_routes import link_router, register_auth_handler
+from qlink_chatbot.utils.auth_token import issue_token
 
 GROUP = "https://chat.whatsapp.com/LsQjGBZ74fP2tDB1TWmQ5V"
 M = "qlink_chatbot.routes.link_routes."
@@ -18,9 +19,15 @@ def _row(slug="coterie", target=GROUP, note="", clicks=3):
 
 class LinkRoutesTest(unittest.TestCase):
     def setUp(self):
+        env = patch.dict("os.environ", {"DASHBOARD_TOKEN_SECRET": "test-secret"})
+        env.start()
+        self.addCleanup(env.stop)
         app = FastAPI()
         app.include_router(link_router, prefix="/dashboard")
-        self.client = TestClient(app)
+        register_auth_handler(app)
+        token, _ = issue_token("admin")
+        self.client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        self.anon = TestClient(app)
 
     @patch(M + "list_short_links")
     def test_list_includes_public_url(self, lst):
@@ -96,13 +103,34 @@ class LinkRoutesTest(unittest.TestCase):
         delete.return_value = False
         self.assertEqual(self.client.delete("/dashboard/links/coterie").status_code, 404)
 
-    def test_no_server_side_auth_matches_existing_dashboard_endpoints(self):
-        # Documented gap: like every other /dashboard route, no credentials are
-        # required (the dashboard login only gates the UI). Pinned so a future
-        # auth change is a deliberate decision.
-        with patch(M + "list_short_links", return_value=[]):
-            res = self.client.get("/dashboard/links")
-        self.assertEqual(res.status_code, 200)
+    def test_requires_valid_token(self):
+        calls = [
+            ("get", "/dashboard/links", None),
+            ("post", "/dashboard/links", {"slug": "a", "target": GROUP}),
+            ("patch", "/dashboard/links/a", {"note": "x"}),
+            ("delete", "/dashboard/links/a", None),
+        ]
+        bad_headers = [
+            {},
+            {"Authorization": "Bearer garbage"},
+            {"Authorization": "Basic abc"},
+            {"Authorization": "Bearer "},
+        ]
+        with patch(M + "list_short_links", return_value=[]) as lst:
+            for method, url, body in calls:
+                for h in bad_headers:
+                    res = getattr(self.anon, method)(url, headers=h, **({"json": body} if body else {}))
+                    self.assertEqual(res.status_code, 401, (method, h))
+                    self.assertEqual(
+                        res.json(), {"success": False, "message": "Unauthorized"}
+                    )
+            lst.assert_not_called()
+            self.assertEqual(self.client.get("/dashboard/links").status_code, 200)
+
+    def test_expired_token_rejected(self):
+        old, _ = issue_token("admin", now=1000)
+        res = self.anon.get("/dashboard/links", headers={"Authorization": f"Bearer {old}"})
+        self.assertEqual(res.status_code, 401)
 
 
 if __name__ == "__main__":

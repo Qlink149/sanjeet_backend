@@ -1,5 +1,6 @@
 
 import asyncio
+import hmac
 import json
 import os
 import re
@@ -37,6 +38,7 @@ from qlink_chatbot.database.masterclasses import (
     set_active,
     update_masterclass,
 )
+from qlink_chatbot.utils.auth_token import TokenError, issue_token
 from qlink_chatbot.utils.env_load import password as pwd
 from qlink_chatbot.utils.env_load import public_base_url
 from qlink_chatbot.utils.env_load import username as us
@@ -146,12 +148,19 @@ def login(data: LoginData):
     try:
         if not password or not username:
             return JSONResponse({"success":False, "message": "Invalid Request"}, status_code=401)
-        elif (
-            username != us or password != pwd
+        elif not (
+            hmac.compare_digest(username.encode(), (us or "").encode())
+            and hmac.compare_digest(password.encode(), (pwd or "").encode())
         ):
             return JSONResponse({"success":False, "message": "Invalid Username or Password"}, status_code=402)
         else:
-            return JSONResponse({"success":True}, status_code=201)
+            body = {"success": True}
+            try:
+                token, expires_at = issue_token(username)
+                body.update({"token": token, "expires_at": expires_at})
+            except TokenError:
+                logger.warning("login ok but no token secret configured")
+            return JSONResponse(body, status_code=201)
     except Exception as e:
         logger.info("Error Occured in login", extra={"error": e})
         return JSONResponse({
