@@ -187,6 +187,9 @@ def build_lead_query(
     elif whatsapp_ready_only:
         query["whatsapp_ready"] = True
         query["contact_number"] = {"$nin": [None, ""]}
+        # A number marked wrong must never be messaged, even if some import or
+        # recompute later flips whatsapp_ready back on.
+        query["wrong_number"] = {"$ne": True}
     quiz_match = None
     if quiz_cat == "quiz_filled":
         quiz_match = _quiz_filled_match()
@@ -330,7 +333,7 @@ def get_lead_stats():
                     }
                 ],
                 "whatsapp_ready": [
-                    {"$match": {"whatsapp_ready": True}},
+                    {"$match": {"whatsapp_ready": True, "wrong_number": {"$ne": True}}},
                     {"$count": "n"},
                 ],
                 "no_number": [
@@ -583,6 +586,8 @@ def recompute_lead_phones() -> dict:
     for key, items in groups.items():
         items.sort(key=lambda pair: _lead_sort_key(pair[0]))
         keeper_doc, cls, ready, sendable = items[-1]
+        if any(pair[0].get("wrong_number") for pair in items):
+            ready = False  # a number marked wrong stays not-sendable
         numbers = []
         seen = set()
         names = []

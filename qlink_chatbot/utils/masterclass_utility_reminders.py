@@ -62,6 +62,7 @@ def _quiz_due_query(now: datetime) -> dict:
         ],
         "contact_number": {"$nin": [None, ""]},
         "whatsapp_ready": True,
+        "wrong_number": {"$ne": True},
         "masterclass_nudge_in_progress": {"$ne": True},
     }
 
