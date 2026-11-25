@@ -6,6 +6,12 @@ from qlink_chatbot.database.db_utils import (
     schedule_campaign_mc_nudge,
     set_campaign_recipient_sent,
 )
+from qlink_chatbot.utils.broadcast_guard import (
+    filter_already_received,
+    mark_skipped,
+    release_claim,
+    try_claim,
+)
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.phone import normalize_phone_list
 from qlink_chatbot.whatsapp_functions.dashboard.get_all_templates import (
@@ -51,6 +57,7 @@ def send_campaign_messages(
     phones: list,
     template_id: str,
     image_url: str | None,
+    skip_already_sent: bool = True,
 ):
     """Sends every recipient's message and records the outcome.
 
@@ -68,9 +75,31 @@ def send_campaign_messages(
     template_name = campaign.get("template_name") or template_id
     content = _template_chat_content(template_id, template_name)
 
+    if skip_already_sent:
+        # Same template already delivered in an earlier campaign (scheduler path and
+        # any caller that did not pre-filter): record them as skipped, not sent.
+        phones, already = filter_already_received(
+            template_id, template_name, phones, exclude_campaign_id=campaign_id
+        )
+        for phone in already:
+            mark_skipped(campaign_id, phone)
+        if already:
+            logger.info(
+                "Skipped recipients who already received this template",
+                extra={"campaign_id": campaign_id, "skipped": len(already)},
+            )
+
     for phone in phones:
+        claimed = False
+        if skip_already_sent:
+            if not try_claim(phone, template_id, template_name, campaign_id):
+                mark_skipped(campaign_id, phone)
+                continue
+            claimed = True
         try:
             rsp = send_template_message(phone, template_id, image_url=image_url)
+            if claimed and not rsp.get("success"):
+                release_claim(phone, template_id, template_name, campaign_id)
             set_campaign_recipient_sent(
                 campaign_id,
                 phone,
@@ -95,6 +124,8 @@ def send_campaign_messages(
                 entry["error"] = rsp["error"]
             append_chat_entries(phone, [entry])
         except Exception as e:
+            if claimed:
+                release_claim(phone, template_id, template_name, campaign_id)
             logger.error(
                 "Error sending campaign message",
                 extra={"campaign_id": campaign_id, "phone": phone, "error": str(e)},

@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from qlink_chatbot.database.collections import idac, leads
+from qlink_chatbot.database.source_lists import (
+    add_merged_source_counts,
+    source_condition,
+)
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.phone import (
     normalize_wa_phone,
@@ -168,7 +172,7 @@ def build_lead_query(
     if prod:
         query["products"] = prod
     if source:
-        query["source"] = source
+        query["source"] = source_condition(source)
     if masterclass_id:
         query["masterclass_registrations.masterclass_id"] = masterclass_id
     if no_number_only:
@@ -405,7 +409,7 @@ def get_lead_stats():
         "quiz_no_masterclass": _facet_count(facet.get("quiz_no_masterclass") or []),
         "pipelines": pipelines,
         "products": dict(sorted(products.items(), key=lambda kv: -kv[1])),
-        "sources": dict(sorted(sources.items(), key=lambda kv: -kv[1])),
+        "sources": add_merged_source_counts(sources, leads),
     }
 
 
