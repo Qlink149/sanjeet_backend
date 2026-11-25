@@ -23,6 +23,10 @@ def normalize_wa_phone(raw: str | None) -> str:
 
     if len(d) == 12 and d.startswith("91") and d[2] in "6789":
         return d
+    # 91 + stray trunk 0 + 10-digit mobile (e.g. 9109870777200), a common
+    # data-entry error; it is the same person as 919870777200.
+    if len(d) == 13 and d.startswith("910") and d[3] in "6789":
+        return "91" + d[3:]
     if len(d) == 10 and d[0] in "6789":
         return "91" + d
     if len(d) == 11 and d.startswith("0") and d[1] in "6789":
@@ -103,15 +107,63 @@ def phone_lookup_variants(phone: str | None) -> list[str]:
     return [v for v in variants if v]
 
 
+_MULTI_NUMBER_SPLIT_RE = re.compile(r"[/,;|\n]+|\s+or\s+", re.IGNORECASE)
+
+
+def split_phone_candidates(raw) -> list[str]:
+    """A cell can hold several numbers ('98xxxxxx01 / 99xxxxxx02'). Split it."""
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    return [part.strip() for part in _MULTI_NUMBER_SPLIT_RE.split(text) if part.strip()]
+
+
+def is_valid_wa_phone(normalized: str | None) -> bool:
+    """A normalized number we can plausibly send to (digits only, sane length)."""
+    n = normalized or ""
+    if not n.isdigit() or not 11 <= len(n) <= 15:
+        return False
+    if n.startswith("91"):
+        return len(n) == 12 and n[2] in "6789"
+    return True
+
+
+def first_valid_phone(raw) -> str:
+    """Best number in a cell: an India/UAE number first (what we can WhatsApp),
+    else the first valid international one, else the first candidate."""
+    candidates = [
+        normalize_wa_phone(c) for c in (split_phone_candidates(raw) or [str(raw or "")])
+    ]
+    candidates = [n for n in candidates if n]
+    for n in candidates:
+        if classify_phone(n)[1]:
+            return n
+    for n in candidates:
+        if is_valid_wa_phone(n):
+            return n
+    return candidates[0] if candidates else ""
+
+
 def normalize_phone_list(phones: list | None) -> list[str]:
+    """Normalize and de-duplicate. One number per input (the first valid one), so
+    a person listed with two numbers is never messaged twice."""
     out: list[str] = []
     seen: set[str] = set()
     for phone in phones or []:
-        n = normalize_wa_phone(phone) or str(phone or "").strip()
+        n = first_valid_phone(phone) or str(phone or "").strip()
         if n and n not in seen:
             seen.add(n)
             out.append(n)
     return out
+
+
+def partition_phones(phones: list | None) -> tuple[list[str], list[str]]:
+    """(valid, invalid): de-duplicated sendable numbers, and the unusable inputs."""
+    valid = []
+    invalid = []
+    for n in normalize_phone_list(phones):
+        (valid if is_valid_wa_phone(n) else invalid).append(n)
+    return valid, invalid
 
 
 def normalize_trigger_text(text: str | None) -> str:

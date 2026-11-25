@@ -745,6 +745,9 @@ def _parse_recipient_dt(value) -> datetime | None:
 
 
 def _campaign_stats(recipients: list) -> dict:
+    # People skipped because they already received this template are not part of
+    # this broadcast's audience, so they must not drag the delivery rate down.
+    recipients = [r for r in recipients if r.get("status") != "skipped_duplicate"]
     total = len(recipients)
     delivered = sum(1 for r in recipients if r["status"] in ("delivered", "read"))
     read = sum(1 for r in recipients if r["status"] == "read")

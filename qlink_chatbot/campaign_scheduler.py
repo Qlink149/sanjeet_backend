@@ -20,6 +20,7 @@ from qlink_chatbot.database.db_utils import (
     sync_expiry_jobs_from_templates,
 )
 from qlink_chatbot.database.leads import build_lead_query
+from qlink_chatbot.utils.broadcast_guard import filter_already_received
 from qlink_chatbot.utils.phone import normalize_phone_list
 from qlink_chatbot.utils.template_buttons import resolve_masterclass_nudge_enabled
 from qlink_chatbot.utils.template_image import resolve_template_image_url
@@ -65,6 +66,15 @@ def _run_one_schedule(sched: dict, run_date: str):
             (t["elementName"] for t in all_templates if t.get("id") == template_id),
             sched.get("template_name") or template_id,
         )
+        phones, already = filter_already_received(template_id, template_name, phones)
+        if already:
+            logger.info(
+                "Scheduled campaign skipped people who already received it",
+                extra={"schedule_id": schedule_id, "skipped": len(already)},
+            )
+        if not phones:
+            mark_schedule_run(schedule_id, None, run_date)
+            return
         campaign_id = create_campaign(
             template_id,
             template_name,

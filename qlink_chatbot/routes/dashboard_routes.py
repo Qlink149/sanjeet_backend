@@ -41,7 +41,8 @@ from qlink_chatbot.utils.env_load import password as pwd
 from qlink_chatbot.utils.env_load import public_base_url
 from qlink_chatbot.utils.env_load import username as us
 from qlink_chatbot.utils.logger_config import logger
-from qlink_chatbot.utils.phone import normalize_phone_list, normalize_wa_phone
+from qlink_chatbot.utils.broadcast_guard import filter_already_received
+from qlink_chatbot.utils.phone import normalize_wa_phone, partition_phones
 from qlink_chatbot.whatsapp_functions.dashboard.create_template import (
     create_template,
     upload_template_media,
@@ -509,6 +510,7 @@ async def trigger_campaign_v2(
     source: str | None = Form(None),
     exclude_phone_numbers: str | None = Form(None),
     dry_run: bool = Form(False),
+    skip_already_sent: bool = Form(True),
 ):
     try:
         records = []
@@ -583,7 +585,7 @@ async def trigger_campaign_v2(
                 content={"success": False, "message": "Provide file, phone list or category"},
             )
 
-        phones = normalize_phone_list(
+        phones, invalid_numbers = partition_phones(
             [
                 r["phone_number"] if category else f"{r['phone_code']}{r['phone_number']}"
                 for r in records
@@ -600,6 +602,39 @@ async def trigger_campaign_v2(
                 },
             )
 
+        all_templates = await asyncio.to_thread(get_all_templates) or []
+        template_name = next(
+            (t["elementName"] for t in all_templates if t.get("id") == template_id),
+            template_id,
+        )
+
+        # Never send the same template to the same person twice: drop everyone who
+        # already received it in an earlier campaign (preview counts this too).
+        skipped_already_sent: list[str] = []
+        if skip_already_sent:
+            phones, skipped_already_sent = await asyncio.to_thread(
+                filter_already_received, template_id, template_name, phones
+            )
+
+        def _audience_note() -> str:
+            notes = []
+            if skipped_already_sent:
+                notes.append(f"{len(skipped_already_sent)} skipped (already received this template)")
+            if invalid_numbers:
+                notes.append(f"{len(invalid_numbers)} skipped (invalid phone number)")
+            return f" ({'; '.join(notes)})" if notes else ""
+
+        if not phones:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "success": False,
+                    "skipped_already_sent": len(skipped_already_sent),
+                    "invalid_numbers": len(invalid_numbers),
+                    "message": "Nobody left to send to" + _audience_note() + ".",
+                },
+            )
+
         # Preview mode — resolves and counts the audience exactly like a
         # real send would, but never creates a campaign or queues any
         # messages. Lets the dropdown filters be tested against real data
@@ -611,16 +646,12 @@ async def trigger_campaign_v2(
                     "success": True,
                     "status": "dry_run",
                     "total": len(phones),
+                    "skipped_already_sent": len(skipped_already_sent),
+                    "invalid_numbers": len(invalid_numbers),
                     "sample_phones": phones[:5],
-                    "message": f"Dry run — {len(phones)} recipient(s) would be messaged. Nothing was sent.",
+                    "message": f"Dry run — {len(phones)} recipient(s) would be messaged{_audience_note()}. Nothing was sent.",
                 },
             )
-
-        all_templates = await asyncio.to_thread(get_all_templates) or []
-        template_name = next(
-            (t["elementName"] for t in all_templates if t.get("id") == template_id),
-            template_id,
-        )
 
         from qlink_chatbot.utils.template_buttons import resolve_masterclass_nudge_enabled
 
@@ -664,21 +695,31 @@ async def trigger_campaign_v2(
         sync_send = len(phones) <= SYNC_CAMPAIGN_SEND_THRESHOLD
         if sync_send:
             await asyncio.to_thread(
-                send_campaign_messages, campaign_id, phones, template_id, image_url
+                send_campaign_messages,
+                campaign_id,
+                phones,
+                template_id,
+                image_url,
+                skip_already_sent,
             )
             status = "sent"
             message = (
-                f"Campaign sent to {len(phones)} recipient(s). "
+                f"Campaign sent to {len(phones)} recipient(s){_audience_note()}. "
                 "Open Campaign Analytics for delivery progress."
             )
         else:
             # Large audiences: queue in background to avoid request timeouts.
             background_tasks.add_task(
-                send_campaign_messages, campaign_id, phones, template_id, image_url
+                send_campaign_messages,
+                campaign_id,
+                phones,
+                template_id,
+                image_url,
+                skip_already_sent,
             )
             status = "queued"
             message = (
-                f"Campaign queued for {len(phones)} recipient(s). "
+                f"Campaign queued for {len(phones)} recipient(s){_audience_note()}. "
                 "Check Campaign Analytics for live progress."
             )
 
@@ -688,6 +729,8 @@ async def trigger_campaign_v2(
                 "success": True,
                 "campaign_id": campaign_id,
                 "total": len(phones),
+                "skipped_already_sent": len(skipped_already_sent),
+                "invalid_numbers": len(invalid_numbers),
                 "status": status,
                 "message": message,
             },

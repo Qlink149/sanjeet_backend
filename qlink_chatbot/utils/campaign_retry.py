@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from qlink_chatbot.database.collections import campaigns
 from qlink_chatbot.database.db_utils import append_chat_entries
+from qlink_chatbot.utils.broadcast_guard import mark_skipped, release_claim, try_claim
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.template_image import resolve_template_image_url
 from qlink_chatbot.whatsapp_functions.dashboard.send_campaign_batch import (
@@ -316,8 +317,23 @@ def retry_campaign_recipient(claimed: dict) -> dict:
     image_url = resolve_template_image_url(template_id)
     content = _template_chat_content(template_id, template_name)
 
+    # This recipient is in a failed state for this campaign, so any claim this
+    # campaign still holds for them is stale: give it back, then claim afresh. If
+    # another campaign has since delivered the same template to them, skip.
+    release_claim(phone, template_id, template_name, campaign_id)
+    if not try_claim(phone, template_id, template_name, campaign_id):
+        mark_skipped(campaign_id, phone)
+        return {
+            "campaign_id": campaign_id,
+            "phone_number": phone,
+            "success": False,
+            "error": "already received this template",
+        }
+
     try:
         rsp = send_template_message(phone, template_id, image_url=image_url)
+        if not rsp.get("success"):
+            release_claim(phone, template_id, template_name, campaign_id)
         record_campaign_retry_send(
             campaign_id,
             phone,
@@ -342,6 +358,7 @@ def retry_campaign_recipient(claimed: dict) -> dict:
             "error": rsp.get("error"),
         }
     except Exception as e:
+        release_claim(phone, template_id, template_name, campaign_id)
         logger.exception(
             "Campaign retry send failed",
             extra={"campaign_id": campaign_id, "phone": phone, "error": str(e)},
