@@ -5,11 +5,6 @@ from unittest.mock import MagicMock, patch
 
 from pymongo.errors import DuplicateKeyError
 
-from qlink_chatbot.database.source_lists import (
-    COACHING_PAYMENT_LABEL,
-    add_merged_source_counts,
-    source_condition,
-)
 from qlink_chatbot.utils import broadcast_guard as guard
 from qlink_chatbot.utils.phone import (
     first_valid_phone,
@@ -229,24 +224,6 @@ class SendLoopTest(unittest.TestCase):
 
 
 class MergedListTest(unittest.TestCase):
-    def test_merged_label_becomes_a_regex_other_sources_stay_exact(self):
-        cond = source_condition(COACHING_PAYMENT_LABEL)
-        self.assertIn("$regex", cond)
-        import re
-
-        self.assertTrue(
-            re.search(cond["$regex"], "Phone contacts; Coaching Payment & Client Database › All Leads")
-        )
-        self.assertFalse(re.search(cond["$regex"], "Calendly"))
-        self.assertEqual(source_condition("Calendly"), "Calendly")
-
-    def test_merged_list_is_added_to_dropdown_counts(self):
-        leads = MagicMock()
-        leads.count_documents.return_value = 364
-        out = add_merged_source_counts({"Calendly": 91, "(blank)": 5}, leads)
-        self.assertEqual(out[COACHING_PAYMENT_LABEL], 364)
-        self.assertEqual(list(out)[0], COACHING_PAYMENT_LABEL)  # biggest first
-
     def test_skipped_recipients_do_not_count_in_campaign_stats(self):
         from qlink_chatbot.database.db_utils import _campaign_stats
 

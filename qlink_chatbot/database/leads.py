@@ -6,7 +6,9 @@ from uuid import uuid4
 
 from qlink_chatbot.database.collections import idac, leads
 from qlink_chatbot.database.source_lists import (
-    add_merged_source_counts,
+    group_product_counts,
+    group_source_counts,
+    product_condition,
     source_condition,
 )
 from qlink_chatbot.utils.logger_config import logger
@@ -171,7 +173,7 @@ def build_lead_query(
         query["pipeline"] = pipe
     prod = product or sub_category
     if prod:
-        query["products"] = prod
+        query["products"] = product_condition(prod)
     if source:
         query["source"] = source_condition(source)
     if segment:
@@ -362,13 +364,10 @@ def get_lead_stats():
                     },
                     {"$count": "n"},
                 ],
+                # grouped by the whole list, so a lead with two variants of one
+                # programme is counted once when the filters are grouped
                 "products": [
-                    {
-                        "$unwind": {
-                            "path": "$products",
-                            "preserveNullAndEmptyArrays": False,
-                        }
-                    },
+                    {"$match": {"products.0": {"$exists": True}}},
                     {"$group": {"_id": "$products", "n": {"$sum": 1}}},
                 ],
                 "sources": [
@@ -408,7 +407,9 @@ def get_lead_stats():
     rows = list(leads.aggregate(pipeline))
     facet = rows[0] if rows else {}
     pipelines = {d["_id"] or "unknown": d["n"] for d in facet.get("pipelines") or []}
-    products = {d["_id"]: d["n"] for d in facet.get("products") or [] if d.get("_id")}
+    products = group_product_counts(
+        [(d["_id"], d["n"]) for d in facet.get("products") or [] if d.get("_id")]
+    )
     segments = {d["_id"]: d["n"] for d in facet.get("segments") or [] if d.get("_id")}
     sources = {d["_id"] or "(blank)": d["n"] for d in facet.get("sources") or []}
     return {
@@ -421,8 +422,8 @@ def get_lead_stats():
         "quiz_filled": _facet_count(facet.get("quiz_filled") or []),
         "quiz_no_masterclass": _facet_count(facet.get("quiz_no_masterclass") or []),
         "pipelines": pipelines,
-        "products": dict(sorted(products.items(), key=lambda kv: -kv[1])),
-        "sources": add_merged_source_counts(sources, leads),
+        "products": products,
+        "sources": group_source_counts(sources),
         "segments": dict(sorted(segments.items(), key=lambda kv: -kv[1])),
     }
 

@@ -52,7 +52,7 @@ class SegmentStatsTest(unittest.TestCase):
         with patch.object(leads_mod, "leads", fake), patch(
             "qlink_chatbot.database.masterclasses.get_active_masterclass",
             return_value=None,
-        ), patch.object(leads_mod, "add_merged_source_counts", lambda s, c: s):
+        ):
             stats = leads_mod.get_lead_stats()
         self.assertEqual(list(stats["segments"]), [TAG, "Dubai"])
         self.assertEqual(stats["segments"][TAG], 680)
