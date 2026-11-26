@@ -62,6 +62,13 @@ class SourceGroupTest(unittest.TestCase):
         self.assertEqual(list(out)[0], "Phone contacts")
 
 
+class HiddenSourceTest(unittest.TestCase):
+    def test_pdf_list_is_offered_as_a_tag_not_a_source(self):
+        pdf = "Collated Leads (WhatsApp broadcast PDF)"
+        out = group_source_counts({pdf: 24, "Calendly": 2})
+        self.assertEqual(out, {"Calendly": 2})
+
+
 class ProductGroupTest(unittest.TestCase):
     def test_variants_merge_and_count_a_lead_once(self):
         out = group_product_counts(

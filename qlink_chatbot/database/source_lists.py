@@ -37,9 +37,12 @@ SOURCE_GROUPS: list[tuple[str, str, str]] = [
     ("Money Ceiling Quiz", _token("Money Ceiling Quiz"), ""),
     ("Via 5X Money", _token("Via 5X Money"), ""),
     ("Masterclass", "Masterclass", ""),
-    ("Collated leads (PDF)", _START + "Collated Leads", ""),
     ("Other / old contacts", _START + "(?:Old relationship|Returning|Did Discovery Call)", ""),
 ]
+
+# Not offered in the source dropdown: the whole PDF list is a Tag, and a source
+# entry holding only the people first added from the PDF invites picking the wrong one.
+HIDDEN_SOURCES = {"Collated Leads (WhatsApp broadcast PDF)"}
 
 # labels shown by earlier versions, still accepted
 SOURCE_ALIASES = {"Coaching Payment & Client Database (all, merged)": "Coaching database & leads"}
@@ -115,6 +118,8 @@ def group_source_counts(raw_counts: dict[str, int]) -> dict[str, int]:
     """
     out: dict[str, int] = {}
     for raw, n in raw_counts.items():
+        if raw in HIDDEN_SOURCES:
+            continue
         hits = [label for label, pattern, options in SOURCE_GROUPS if _matches(pattern, options, raw)]
         for label in hits or [raw]:
             out[label] = out.get(label, 0) + n
