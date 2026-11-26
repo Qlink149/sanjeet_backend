@@ -40,11 +40,23 @@ def _run_one_schedule(sched: dict, run_date: str):
     schedule_id = sched["schedule_id"]
     template_id = sched["template_id"]
     try:
+        segment = sched.get("segment")
+        if segment == "":
+            segment = None
         query = build_lead_query(
             category=sched.get("category"),
             sub_category=sched.get("sub_category"),
+            segment=segment,
             whatsapp_ready_only=True,
         )
+        if segment is not None:
+            # Quiz audiences wrap the base filters in $and; base comes first.
+            base = query["$and"][0] if "$and" in query else query
+            if not isinstance(segment, str) or base.get("segments") != segment:
+                raise ValueError(
+                    f"Schedule segment {segment!r} is not applied to the audience; "
+                    "refusing to send"
+                )
         phones = normalize_phone_list(
             [
                 d["contact_number"]

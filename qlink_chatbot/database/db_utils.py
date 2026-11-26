@@ -871,6 +871,7 @@ def create_schedule(
     enabled: bool = True,
     schedule_type: str = "delay",
     send_date: str | None = None,
+    segment: str | None = None,
 ) -> str:
     """Creates a campaign schedule.
 
@@ -907,6 +908,7 @@ def create_schedule(
         "send_date": send_date,
         "category": category,
         "sub_category": sub_category,
+        "segment": segment or None,
         "expiry_offset_days": expiry_offset_days,
         "expiry_date": expiry_date,
         "enabled": enabled,
@@ -927,6 +929,7 @@ def ensure_expiry_schedule(
     expiry_offset_days: int | None,
     expiry_date: str | None,
     send_time: str = "10:00",
+    segment: str | None = None,
 ) -> str | None:
     """Starts (or reuses) a daily expiry auto-send for this template/audience."""
     if expiry_offset_days is None and not expiry_date:
@@ -937,6 +940,8 @@ def ensure_expiry_schedule(
         "enabled": True,
         "category": category,
         "sub_category": sub_category,
+        # None also matches schedules saved before the field existed.
+        "segment": segment or None,
         "expiry_offset_days": expiry_offset_days,
         "expiry_date": expiry_date,
     }
@@ -953,6 +958,7 @@ def ensure_expiry_schedule(
         expiry_offset_days=expiry_offset_days,
         expiry_date=expiry_date,
         schedule_type="expiry",
+        segment=segment,
     )
 
 
@@ -994,8 +1000,18 @@ def get_schedules(template_id: str | None = None):
 
 def update_schedule(schedule_id: str, **fields) -> bool:
     """Updates whichever schedule fields are provided (partial update)."""
-    allowed = {"offset_days", "send_time", "category", "sub_category", "enabled"}
+    allowed = {
+        "offset_days",
+        "send_time",
+        "category",
+        "sub_category",
+        "segment",
+        "enabled",
+    }
     set_fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    # None means "leave as is"; an empty string clears the segment.
+    if set_fields.get("segment") == "":
+        set_fields["segment"] = None
     if not set_fields:
         return False
     result = campaign_schedules.update_one(

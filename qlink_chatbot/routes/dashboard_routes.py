@@ -865,6 +865,7 @@ class ScheduleCreate(BaseModel):
     schedule_type: str = "delay"
     send_date: str | None = None  # YYYY-MM-DD in IST, calendar pick
     enabled: bool = True
+    segment: str | None = None
 
 
 class ScheduleUpdate(BaseModel):
@@ -873,6 +874,7 @@ class ScheduleUpdate(BaseModel):
     category: str | None = None
     sub_category: str | None = None
     enabled: bool | None = None
+    segment: str | None = None  # "" clears it
 
 
 def _validate_schedule_fields(offset_days: int, send_time: str) -> str | None:
@@ -929,9 +931,14 @@ async def create_schedule_route(payload: ScheduleCreate):
             payload.enabled,
             payload.schedule_type,
             payload.send_date,
+            segment=payload.segment,
         )
         return JSONResponse(
-            content={"success": True, "data": {"schedule_id": schedule_id}},
+            content={
+                "success": True,
+                # segment is echoed so the dashboard can confirm it was saved
+                "data": {"schedule_id": schedule_id, "segment": payload.segment or None},
+            },
             status_code=201,
         )
     except Exception as e:
