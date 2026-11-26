@@ -7,10 +7,20 @@ from datetime import datetime, timedelta, timezone
 from qlink_chatbot.database.collections import campaigns
 from qlink_chatbot.database.db_utils import append_chat_entries
 from qlink_chatbot.utils.broadcast_guard import mark_skipped, release_claim, try_claim
+from qlink_chatbot.utils.campaign_params import (
+    TemplateParamsError,
+    TemplateUnavailableError,
+    check_template_params,
+    fetch_templates,
+    resolve_params,
+)
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.template_image import resolve_template_image_url
 from qlink_chatbot.whatsapp_functions.dashboard.send_campaign_batch import (
     _template_chat_content,
+)
+from qlink_chatbot.whatsapp_functions.dashboard.get_all_templates import (
+    get_all_templates,
 )
 from qlink_chatbot.whatsapp_functions.dashboard.send_template_by_id import (
     send_template_message,
@@ -20,6 +30,7 @@ DEFAULT_RETRY_DELAY_HOURS = 3
 MAX_RETRIES_PER_CRON = 40
 FAILED_STATUSES = frozenset({"failed", "undelivered"})
 CLAIM_STALE_MINUTES = 15
+TEMPLATE_RECHECK_MINUTES = 15
 RETRY_COUNT_PENDING_QUERY = {
     "$or": [
         {"retry_count": {"$exists": False}},
@@ -220,7 +231,13 @@ def claim_due_recipient() -> dict | None:
                 }
             }
         },
-        {"campaign_id": 1, "template_id": 1, "template_name": 1, "recipients": 1},
+        {
+            "campaign_id": 1,
+            "template_id": 1,
+            "template_name": 1,
+            "template_params": 1,
+            "recipients": 1,
+        },
     )
     if not doc:
         return None
@@ -266,6 +283,7 @@ def claim_due_recipient() -> dict | None:
                 "phone_number": phone,
                 "template_id": doc.get("template_id"),
                 "template_name": doc.get("template_name"),
+                "template_params": doc.get("template_params"),
             }
     return None
 
@@ -308,14 +326,57 @@ def record_campaign_retry_send(
     )
 
 
+def _defer_retry(campaign_id: str, phone_number: str, error: str) -> None:
+    """Hand a claimed retry back for later, without using up the one retry."""
+    campaigns.update_one(
+        {"campaign_id": campaign_id, "recipients.phone_number": phone_number},
+        {
+            "$set": {
+                "recipients.$.retry_at": _utc_now()
+                + timedelta(minutes=TEMPLATE_RECHECK_MINUTES),
+                "recipients.$.retry_in_progress": False,
+                "recipients.$.error": error,
+            }
+        },
+    )
+
+
 def retry_campaign_recipient(claimed: dict) -> dict:
     """Send one retry for a previously claimed recipient."""
     campaign_id = claimed["campaign_id"]
     phone = claimed["phone_number"]
     template_id = claimed["template_id"]
     template_name = claimed.get("template_name") or template_id
+
+    templates = fetch_templates(get_all_templates)
+    try:
+        _, param_spec = check_template_params(
+            templates,
+            template_id,
+            claimed.get("template_params"),
+        )
+    except TemplateParamsError as e:
+        error = f"Not sent: {e}"
+        logger.error(
+            "Campaign retry refused: template variables",
+            extra={"campaign_id": campaign_id, "phone": phone, "error": error},
+        )
+        if isinstance(e, TemplateUnavailableError):
+            _defer_retry(campaign_id, phone, error)
+        else:
+            release_claim(phone, template_id, template_name, campaign_id)
+            record_campaign_retry_send(
+                campaign_id, phone, success=False, message_id=None, error=error
+            )
+        return {
+            "campaign_id": campaign_id,
+            "phone_number": phone,
+            "success": False,
+            "error": error,
+        }
+
     image_url = resolve_template_image_url(template_id)
-    content = _template_chat_content(template_id, template_name)
+    content = _template_chat_content(template_id, template_name, templates=templates)
 
     # This recipient is in a failed state for this campaign, so any claim this
     # campaign still holds for them is stale: give it back, then claim afresh. If
@@ -331,7 +392,14 @@ def retry_campaign_recipient(claimed: dict) -> dict:
         }
 
     try:
-        rsp = send_template_message(phone, template_id, image_url=image_url)
+        params = resolve_params(param_spec, phone)
+        if params:
+            content = _template_chat_content(
+                template_id, template_name, params, templates
+            )
+        rsp = send_template_message(
+            phone, template_id, image_url=image_url, params=params
+        )
         if not rsp.get("success"):
             release_claim(phone, template_id, template_name, campaign_id)
         record_campaign_retry_send(

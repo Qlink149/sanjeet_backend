@@ -12,9 +12,14 @@ from qlink_chatbot.utils.logger_config import logger
 
 
 def send_template_message(
-    phone_number: str, template_id: str, image_url: str | None = None
+    phone_number: str,
+    template_id: str,
+    image_url: str | None = None,
+    params: list[str] | None = None,
 ) -> dict:
     """Sends a template message to a phone number.
+
+    ``params`` fills the template's {{1}}, {{2}}, ... in order.
 
     `image_url` must be a real, publicly-fetchable URL — required for
     templates with an IMAGE header. Without it, WhatsApp accepts the send
@@ -22,6 +27,15 @@ def send_template_message(
 
     Returns {"success": bool, "message_id": str | None}.
     """
+    params = list(params or [])
+    if any(not isinstance(p, str) or not p.strip() for p in params):
+        error = "Not sent: a template variable value is empty"
+        logger.error(
+            error,
+            extra={"phone_number": phone_number, "template_id": template_id},
+        )
+        return {"success": False, "message_id": None, "error": error}
+
     logger.info(
         "Sending template message",
         extra={"phone_number": phone_number, "image_url": image_url},
@@ -41,7 +55,7 @@ def send_template_message(
         "template": json.dumps(
             {
                 "id": template_id,
-                "params": [],
+                "params": params,
             }
         ),
     }

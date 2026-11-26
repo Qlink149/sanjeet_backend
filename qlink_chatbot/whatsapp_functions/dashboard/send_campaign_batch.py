@@ -12,6 +12,13 @@ from qlink_chatbot.utils.broadcast_guard import (
     release_claim,
     try_claim,
 )
+from qlink_chatbot.utils.campaign_params import (
+    TemplateParamsError,
+    check_template_params,
+    fetch_templates,
+    fill_variables,
+    resolve_params,
+)
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.phone import normalize_phone_list
 from qlink_chatbot.whatsapp_functions.dashboard.get_all_templates import (
@@ -22,12 +29,18 @@ from qlink_chatbot.whatsapp_functions.dashboard.send_template_by_id import (
 )
 
 
-def _template_chat_content(template_id: str, template_name: str) -> str:
+def _template_chat_content(
+    template_id: str,
+    template_name: str,
+    params: list[str] | None = None,
+    templates: list | None = None,
+) -> str:
     """Label an outbound bubble: template name, short body, quiz hint."""
     name = template_name or template_id or "template"
     body = ""
     try:
-        templates = get_all_templates() or []
+        if templates is None:
+            templates = get_all_templates() or []
         match = next(
             (
                 t
@@ -44,6 +57,8 @@ def _template_chat_content(template_id: str, template_name: str) -> str:
             "Could not load template body for chat history",
             extra={"template_id": template_id, "error": str(e)},
         )
+    if body and params:
+        body = fill_variables(body, params)
     parts = [name]
     if body:
         parts.append(body if len(body) <= 240 else f"{body[:237]}...")
@@ -69,11 +84,34 @@ def send_campaign_messages(
     phones = normalize_phone_list(phones)
     campaign = campaigns.find_one(
         {"campaign_id": campaign_id},
-        {"template_name": 1, "template_id": 1, "masterclass_nudge_enabled": 1},
+        {
+            "template_name": 1,
+            "template_id": 1,
+            "masterclass_nudge_enabled": 1,
+            "template_params": 1,
+        },
     ) or {}
     masterclass_nudge_enabled = bool(campaign.get("masterclass_nudge_enabled"))
     template_name = campaign.get("template_name") or template_id
-    content = _template_chat_content(template_id, template_name)
+
+    templates = fetch_templates(get_all_templates)
+    try:
+        _, param_spec = check_template_params(
+            templates,
+            template_id,
+            campaign.get("template_params"),
+        )
+    except TemplateParamsError as e:
+        error = f"Not sent: {e}"
+        logger.error(
+            "Campaign refused: template variables",
+            extra={"campaign_id": campaign_id, "error": error},
+        )
+        for phone in phones:
+            set_campaign_recipient_sent(campaign_id, phone, None, False, error=error)
+        return
+
+    content = _template_chat_content(template_id, template_name, templates=templates)
 
     if skip_already_sent:
         # Same template already delivered in an earlier campaign (scheduler path and
@@ -96,8 +134,16 @@ def send_campaign_messages(
                 mark_skipped(campaign_id, phone)
                 continue
             claimed = True
+        entry_content = content
         try:
-            rsp = send_template_message(phone, template_id, image_url=image_url)
+            params = resolve_params(param_spec, phone)
+            if params:
+                entry_content = _template_chat_content(
+                    template_id, template_name, params, templates
+                )
+            rsp = send_template_message(
+                phone, template_id, image_url=image_url, params=params
+            )
             if claimed and not rsp.get("success"):
                 release_claim(phone, template_id, template_name, campaign_id)
             set_campaign_recipient_sent(
@@ -115,7 +161,7 @@ def send_campaign_messages(
                 )
             entry = {
                 "role": "assistant",
-                "content": content,
+                "content": entry_content,
                 "status": "submitted" if rsp.get("success") else "failed",
             }
             if rsp.get("message_id"):
@@ -136,7 +182,7 @@ def send_campaign_messages(
                 [
                     {
                         "role": "assistant",
-                        "content": content,
+                        "content": entry_content,
                         "status": "failed",
                         "error": str(e),
                     }

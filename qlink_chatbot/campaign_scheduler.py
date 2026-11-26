@@ -21,6 +21,12 @@ from qlink_chatbot.database.db_utils import (
 )
 from qlink_chatbot.database.leads import build_lead_query
 from qlink_chatbot.utils.broadcast_guard import filter_already_received
+from qlink_chatbot.utils.campaign_params import (
+    TemplateParamsError,
+    TemplateUnavailableError,
+    check_template_params,
+    fetch_templates,
+)
 from qlink_chatbot.utils.phone import normalize_phone_list
 from qlink_chatbot.utils.template_buttons import resolve_masterclass_nudge_enabled
 from qlink_chatbot.utils.template_image import resolve_template_image_url
@@ -73,7 +79,21 @@ def _run_one_schedule(sched: dict, run_date: str):
             )
             return
 
-        all_templates = get_all_templates() or []
+        all_templates = fetch_templates(get_all_templates)
+        try:
+            _, template_params = check_template_params(
+                all_templates, template_id, sched.get("template_params")
+            )
+        except TemplateUnavailableError:
+            raise  # nothing sent; stays due, so the next tick checks again
+        except TemplateParamsError as e:
+            error = f"Not sent: {e}"
+            logger.error(
+                "Scheduled campaign refused: template variables",
+                extra={"schedule_id": schedule_id, "error": error},
+            )
+            mark_schedule_run(schedule_id, None, run_date, error=error)
+            return
         template_name = next(
             (t["elementName"] for t in all_templates if t.get("id") == template_id),
             sched.get("template_name") or template_id,
@@ -92,6 +112,7 @@ def _run_one_schedule(sched: dict, run_date: str):
             template_name,
             phones,
             masterclass_nudge_enabled=resolve_masterclass_nudge_enabled(template_id),
+            template_params=template_params,
         )
 
         image_url = resolve_template_image_url(template_id)

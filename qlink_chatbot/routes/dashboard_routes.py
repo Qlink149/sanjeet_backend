@@ -25,6 +25,7 @@ from qlink_chatbot.database.db_utils import (
     get_template_image,
     create_schedule,
     get_schedules,
+    get_schedule,
     update_schedule,
     delete_schedule,
 )
@@ -45,6 +46,14 @@ from qlink_chatbot.utils.env_load import public_base_url
 from qlink_chatbot.utils.env_load import username as us
 from qlink_chatbot.utils.logger_config import logger
 from qlink_chatbot.utils.broadcast_guard import filter_already_received
+from qlink_chatbot.utils.campaign_params import (
+    TemplateParamsError,
+    TemplateUnavailableError,
+    check_template_params,
+    fetch_templates,
+    render_message,
+    resolve_params,
+)
 from qlink_chatbot.utils.phone import normalize_wa_phone, partition_phones
 from qlink_chatbot.whatsapp_functions.dashboard.create_template import (
     create_template,
@@ -505,6 +514,13 @@ async def delete_templates(template_name: str):
         )
 
 
+def _template_params_refusal(error: TemplateParamsError) -> JSONResponse:
+    status = 503 if isinstance(error, TemplateUnavailableError) else 400
+    return JSONResponse(
+        content={"success": False, "message": str(error)}, status_code=status
+    )
+
+
 class PhoneItem(BaseModel):
     phone_code: str
     phone_number: str
@@ -526,6 +542,7 @@ async def trigger_campaign_v2(
     exclude_phone_numbers: str | None = Form(None),
     dry_run: bool = Form(False),
     skip_already_sent: bool = Form(True),
+    template_params: str | None = Form(None),
 ):
     try:
         records = []
@@ -618,7 +635,14 @@ async def trigger_campaign_v2(
                 },
             )
 
-        all_templates = await asyncio.to_thread(get_all_templates) or []
+        all_templates = await asyncio.to_thread(fetch_templates, get_all_templates)
+        # Refuse before anything is created unless every {{n}} has a value.
+        try:
+            template, param_spec = check_template_params(
+                all_templates, template_id, template_params
+            )
+        except TemplateParamsError as e:
+            return _template_params_refusal(e)
         template_name = next(
             (t["elementName"] for t in all_templates if t.get("id") == template_id),
             template_id,
@@ -656,6 +680,9 @@ async def trigger_campaign_v2(
         # messages. Lets the dropdown filters be tested against real data
         # without touching a single lead's phone.
         if dry_run:
+            sample_params = await asyncio.to_thread(
+                resolve_params, param_spec, phones[0]
+            )
             return JSONResponse(
                 status_code=200,
                 content={
@@ -665,6 +692,8 @@ async def trigger_campaign_v2(
                     "skipped_already_sent": len(skipped_already_sent),
                     "invalid_numbers": len(invalid_numbers),
                     "sample_phones": phones[:5],
+                    "variable_count": len(param_spec),
+                    "sample_message": render_message(template, sample_params),
                     "message": f"Dry run — {len(phones)} recipient(s) would be messaged{_audience_note()}. Nothing was sent.",
                 },
             )
@@ -680,6 +709,7 @@ async def trigger_campaign_v2(
             template_name,
             phones,
             masterclass_nudge_enabled=masterclass_nudge_enabled,
+            template_params=param_spec,
         )
 
         # If this template was created with a header image, it was saved in
@@ -866,6 +896,7 @@ class ScheduleCreate(BaseModel):
     send_date: str | None = None  # YYYY-MM-DD in IST, calendar pick
     enabled: bool = True
     segment: str | None = None
+    template_params: list | None = None
 
 
 class ScheduleUpdate(BaseModel):
@@ -875,6 +906,7 @@ class ScheduleUpdate(BaseModel):
     sub_category: str | None = None
     enabled: bool | None = None
     segment: str | None = None  # "" clears it
+    template_params: list | None = None
 
 
 def _validate_schedule_fields(offset_days: int, send_time: str) -> str | None:
@@ -918,6 +950,14 @@ async def create_schedule_route(payload: ScheduleCreate):
                 if error:
                     return JSONResponse(content={"success": False, "message": error}, status_code=400)
 
+        templates = await asyncio.to_thread(fetch_templates, get_all_templates)
+        try:
+            _, param_spec = check_template_params(
+                templates, payload.template_id, payload.template_params
+            )
+        except TemplateParamsError as e:
+            return _template_params_refusal(e)
+
         schedule_id = await asyncio.to_thread(
             create_schedule,
             payload.template_id,
@@ -932,12 +972,17 @@ async def create_schedule_route(payload: ScheduleCreate):
             payload.schedule_type,
             payload.send_date,
             segment=payload.segment,
+            template_params=param_spec,
         )
         return JSONResponse(
             content={
                 "success": True,
                 # segment is echoed so the dashboard can confirm it was saved
-                "data": {"schedule_id": schedule_id, "segment": payload.segment or None},
+                "data": {
+                    "schedule_id": schedule_id,
+                    "segment": payload.segment or None,
+                    "template_params": param_spec,
+                },
             },
             status_code=201,
         )
@@ -976,6 +1021,21 @@ async def update_schedule_route(schedule_id: str, payload: ScheduleUpdate):
                 content={"success": False, "message": "send_time must be in HH:MM 24-hour format"},
                 status_code=400,
             )
+
+        if fields.get("template_params") is not None:
+            schedule = await asyncio.to_thread(get_schedule, schedule_id)
+            if not schedule:
+                return JSONResponse(
+                    content={"success": False, "message": "Schedule not found"},
+                    status_code=404,
+                )
+            templates = await asyncio.to_thread(fetch_templates, get_all_templates)
+            try:
+                _, fields["template_params"] = check_template_params(
+                    templates, schedule["template_id"], fields["template_params"]
+                )
+            except TemplateParamsError as e:
+                return _template_params_refusal(e)
 
         updated = await asyncio.to_thread(
             lambda: update_schedule(schedule_id, **fields)

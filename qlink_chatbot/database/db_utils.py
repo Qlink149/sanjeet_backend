@@ -598,6 +598,7 @@ def create_campaign(
     recipients: list,
     *,
     masterclass_nudge_enabled: bool = False,
+    template_params: list | None = None,
 ) -> str:
     """Creates a campaign record with one pending entry per recipient phone number."""
     campaign_id = str(uuid4())
@@ -605,6 +606,7 @@ def create_campaign(
         "campaign_id": campaign_id,
         "template_id": template_id,
         "template_name": template_name,
+        "template_params": template_params or [],
         "masterclass_nudge_enabled": masterclass_nudge_enabled,
         "retry_policy": {"enabled": True, "delay_hours": 3},
         "recipients": [_default_recipient(phone) for phone in recipients],
@@ -872,6 +874,7 @@ def create_schedule(
     schedule_type: str = "delay",
     send_date: str | None = None,
     segment: str | None = None,
+    template_params: list | None = None,
 ) -> str:
     """Creates a campaign schedule.
 
@@ -909,6 +912,7 @@ def create_schedule(
         "category": category,
         "sub_category": sub_category,
         "segment": segment or None,
+        "template_params": template_params or [],
         "expiry_offset_days": expiry_offset_days,
         "expiry_date": expiry_date,
         "enabled": enabled,
@@ -998,6 +1002,10 @@ def get_schedules(template_id: str | None = None):
     return docs
 
 
+def get_schedule(schedule_id: str) -> dict | None:
+    return campaign_schedules.find_one({"schedule_id": schedule_id}, {"_id": 0})
+
+
 def update_schedule(schedule_id: str, **fields) -> bool:
     """Updates whichever schedule fields are provided (partial update)."""
     allowed = {
@@ -1006,6 +1014,7 @@ def update_schedule(schedule_id: str, **fields) -> bool:
         "category",
         "sub_category",
         "segment",
+        "template_params",
         "enabled",
     }
     set_fields = {k: v for k, v in fields.items() if k in allowed and v is not None}
@@ -1062,10 +1071,22 @@ def get_due_schedules(now_ist: datetime):
     return delay_due + expiry_due
 
 
-def mark_schedule_run(schedule_id: str, campaign_id: str | None, run_date: str):
+def mark_schedule_run(
+    schedule_id: str,
+    campaign_id: str | None,
+    run_date: str,
+    error: str | None = None,
+):
+    """Records a run. ``error`` says why nothing was sent, if it was refused."""
     campaign_schedules.update_one(
         {"schedule_id": schedule_id},
-        {"$set": {"last_run_date": run_date, "last_campaign_id": campaign_id}},
+        {
+            "$set": {
+                "last_run_date": run_date,
+                "last_campaign_id": campaign_id,
+                "last_error": error,
+            }
+        },
     )
 
 

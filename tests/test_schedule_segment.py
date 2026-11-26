@@ -10,6 +10,8 @@ from qlink_chatbot.database import db_utils
 from qlink_chatbot.routes import dashboard_routes as dr
 
 TAG = "Collated Leads (WhatsApp broadcast PDF)"
+# a template without variables, so the variable check passes
+TEMPLATES = [{"id": "t1", "elementName": "n", "data": "Hi"}]
 
 
 class _Cursor(list):
@@ -49,6 +51,9 @@ class ScheduleRoundTripTest(unittest.TestCase):
         patcher = patch.object(db_utils, "campaign_schedules", self.fake)
         patcher.start()
         self.addCleanup(patcher.stop)
+        templates = patch.object(dr, "get_all_templates", return_value=TEMPLATES)
+        templates.start()
+        self.addCleanup(templates.stop)
 
     def _create(self, **extra):
         payload = dr.ScheduleCreate(
@@ -118,7 +123,7 @@ class SchedulerSegmentTest(unittest.TestCase):
         leads.find.return_value = [{"contact_number": "919876543210"}]
         mocks = {
             "leads": leads,
-            "get_all_templates": MagicMock(return_value=[]),
+            "get_all_templates": MagicMock(return_value=TEMPLATES),
             "filter_already_received": MagicMock(side_effect=lambda *a: (a[2], [])),
             "create_campaign": MagicMock(return_value="c1"),
             "resolve_masterclass_nudge_enabled": MagicMock(return_value=False),

@@ -167,6 +167,15 @@ class TryClaimTest(unittest.TestCase):
 @patch("qlink_chatbot.whatsapp_functions.dashboard.send_campaign_batch.send_template_message")
 @patch("qlink_chatbot.whatsapp_functions.dashboard.send_campaign_batch.campaigns")
 class SendLoopTest(unittest.TestCase):
+    def setUp(self):
+        # a template without variables, so the variable check passes
+        patcher = patch(
+            "qlink_chatbot.whatsapp_functions.dashboard.send_campaign_batch.get_all_templates",
+            return_value=[{"id": "tpl-1", "elementName": "coterie_intro", "data": "Hi"}],
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _run(self, phones, **kw):
         from qlink_chatbot.whatsapp_functions.dashboard.send_campaign_batch import (
             send_campaign_messages,
